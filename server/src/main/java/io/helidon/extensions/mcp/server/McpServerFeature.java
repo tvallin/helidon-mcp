@@ -30,6 +30,9 @@ import java.util.function.Function;
 
 import io.helidon.builder.api.RuntimeType;
 import io.helidon.common.LruCache;
+import io.helidon.http.HeaderName;
+import io.helidon.http.HeaderNames;
+import io.helidon.http.ServerRequestHeaders;
 import io.helidon.http.Status;
 import io.helidon.http.sse.SseEvent;
 import io.helidon.jsonrpc.core.JsonRpcError;
@@ -56,7 +59,9 @@ import static io.helidon.extensions.mcp.server.McpSession.State.UNINITIALIZED;
 @RuntimeType.PrototypedBy(McpServerConfig.class)
 public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpServerConfig> {
     private static final int SESSION_CACHE_SIZE = 1000;
-    private static final String PROTOCOL_VERSION = "2024-11-05";
+    private static final String PROTOCOL_VERSION = "2025-03-26";
+
+    private static final HeaderName SESSION_ID_HEADER = HeaderNames.create("Mcp-Session-Id");
 
     private final String endpoint;
     private final McpServerConfig config;
@@ -91,43 +96,43 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             completions.put(completion.reference(), completion);
         }
 
-        builder.putMethod(McpJsonRpc.METHOD_PING, this::pingRpc);
-        builder.putMethod(McpJsonRpc.METHOD_INITIALIZE, this::initializeRpc);
+        builder.method(McpJsonRpc.METHOD_PING, this::pingRpc);
+        builder.method(McpJsonRpc.METHOD_INITIALIZE, this::initializeRpc);
 
         if (!config.tools().isEmpty()) {
             capabilities.add(McpCapability.TOOL_LIST_CHANGED);
-            builder.putMethod(McpJsonRpc.METHOD_TOOLS_LIST, this::toolsListRpc);
-            builder.putMethod(McpJsonRpc.METHOD_TOOLS_CALL, this::toolsCallRpc);
+            builder.method(McpJsonRpc.METHOD_TOOLS_LIST, this::toolsListRpc);
+            builder.method(McpJsonRpc.METHOD_TOOLS_CALL, this::toolsCallRpc);
         }
 
         if (!config.resources().isEmpty()) {
             capabilities.add(McpCapability.RESOURCE_LIST_CHANGED);
             capabilities.add(McpCapability.RESOURCE_SUBSCRIBE);
-            builder.putMethod(McpJsonRpc.METHOD_RESOURCES_LIST, this::resourcesListRpc);
-            builder.putMethod(McpJsonRpc.METHOD_RESOURCES_READ, this::resourcesReadRpc);
-            builder.putMethod(McpJsonRpc.METHOD_RESOURCES_TEMPLATES_LIST, this::resourceTemplateListRpc);
-            builder.putMethod(McpJsonRpc.METHOD_RESOURCES_SUBSCRIBE, this::resourceSubscribeRpc);
-            builder.putMethod(McpJsonRpc.METHOD_RESOURCES_UNSUBSCRIBE, this::resourceUnsubscribeRpc);
+            builder.method(McpJsonRpc.METHOD_RESOURCES_LIST, this::resourcesListRpc);
+            builder.method(McpJsonRpc.METHOD_RESOURCES_READ, this::resourcesReadRpc);
+            builder.method(McpJsonRpc.METHOD_RESOURCES_TEMPLATES_LIST, this::resourceTemplateListRpc);
+            builder.method(McpJsonRpc.METHOD_RESOURCES_SUBSCRIBE, this::resourceSubscribeRpc);
+            builder.method(McpJsonRpc.METHOD_RESOURCES_UNSUBSCRIBE, this::resourceUnsubscribeRpc);
         }
 
         if (!config.prompts().isEmpty()) {
             capabilities.add(McpCapability.PROMPT_LIST_CHANGED);
-            builder.putMethod(McpJsonRpc.METHOD_PROMPT_LIST, this::promptsListRpc);
-            builder.putMethod(McpJsonRpc.METHOD_PROMPT_GET, this::promptsGetRpc);
+            builder.method(McpJsonRpc.METHOD_PROMPT_LIST, this::promptsListRpc);
+            builder.method(McpJsonRpc.METHOD_PROMPT_GET, this::promptsGetRpc);
         }
 
         if (config.logging()) {
             capabilities.add(McpCapability.LOGGING);
-            builder.putMethod(McpJsonRpc.METHOD_LOGGING_SET_LEVEL, this::loggingLogLevelRpc);
+            builder.method(McpJsonRpc.METHOD_LOGGING_SET_LEVEL, this::loggingLogLevelRpc);
         }
 
         capabilities.add(McpCapability.COMPLETION);
         completions.put(NoopCompletion.REFERENCE, new NoopCompletion());
-        builder.putMethod(McpJsonRpc.METHOD_COMPLETION_COMPLETE, this::completionRpc);
+        builder.method(McpJsonRpc.METHOD_COMPLETION_COMPLETE, this::completionRpc);
 
-        builder.putMethod(McpJsonRpc.METHOD_NOTIFICATION_INITIALIZED, this::notificationInitRpc);
-        builder.putMethod(McpJsonRpc.METHOD_NOTIFICATION_CANCELED, this::notificationCancelRpc);
-        builder.putMethod(McpJsonRpc.METHOD_SESSION_DISCONNECT, this::disconnect);
+        builder.method(McpJsonRpc.METHOD_NOTIFICATION_INITIALIZED, this::notificationInitRpc);
+        builder.method(McpJsonRpc.METHOD_NOTIFICATION_CANCELED, this::notificationCancelRpc);
+        builder.method(McpJsonRpc.METHOD_SESSION_DISCONNECT, this::disconnect);
 
         builder.errorHandler(this::handleErrorRequest);
 
@@ -158,6 +163,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         // add all the JSON-RPC routes first
         JsonRpcRouting jsonRpcRouting = JsonRpcRouting.builder()
                 .register(endpoint + "/message", jsonRpcHandlers)
+                .register(endpoint, jsonRpcHandlers)        // "2025-03-26"
                 .build();
         jsonRpcRouting.routing(routing);
 
@@ -171,8 +177,21 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         return config;
     }
 
+    /**
+     * Checks if using SSE or streamable HTTP.
+     *
+     * @param headers the request headers
+     * @return outcome of test
+     */
+    private boolean isStreamableHttp(ServerRequestHeaders headers) {
+        return headers.contains(SESSION_ID_HEADER);
+    }
+
     private void disconnect(ServerRequest request, ServerResponse response) {
         disconnectSession(request, response);
+        if (isStreamableHttp(request.headers())) {
+            response.status(Status.ACCEPTED_202).send();
+        }
     }
 
     private void disconnect(JsonRpcRequest request, JsonRpcResponse response) {
@@ -189,28 +208,50 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     }
 
     private void sse(ServerRequest request, ServerResponse response) {
-        String sessionId = UUID.randomUUID().toString();
-        McpSession session = new McpSession(capabilities);
-        sessions.put(sessionId, session);
+        if (isStreamableHttp(request.headers())) {
+            Optional<McpSession> session = findSession(request);
+            if (session.isEmpty()) {
+                response.status(Status.NOT_FOUND_404).send();
+                return;
+            }
+            // streamable HTTP and active session
+            response.status(Status.METHOD_NOT_ALLOWED_405).send();
+        } else {
+            String sessionId = UUID.randomUUID().toString();
+            McpSession session = new McpSession(capabilities);
+            sessions.put(sessionId, session);
 
-        try (SseSink sink = response.sink(SseSink.TYPE)) {
-            sink.emit(SseEvent.builder()
-                              .name("endpoint")
-                              .data(endpoint + "/message?sessionId=" + sessionId)
-                              .build());
-            session.poll(message -> sink.emit(SseEvent.builder()
-                                                      .name("message")
-                                                      .data(message)
-                                                      .build()));
-        } catch (McpException e) {
-            session.disconnect();
-            sessions.remove(sessionId);
+            try (SseSink sink = response.sink(SseSink.TYPE)) {
+                sink.emit(SseEvent.builder()
+                                  .name("endpoint")
+                                  .data(endpoint + "/message?sessionId=" + sessionId)
+                                  .build());
+                session.poll(message -> sink.emit(SseEvent.builder()
+                                                          .name("message")
+                                                          .data(message)
+                                                          .build()));
+            } catch (McpException e) {
+                session.disconnect();
+                sessions.remove(sessionId);
+            }
         }
     }
 
+    /**
+     * Finds session by either looking for header (streamable HTTP) or query
+     * param (SSE).
+     *
+     * @param req the request
+     * @return the optional session
+     */
     private Optional<McpSession> findSession(HttpRequest req) {
         try {
-            String sessionId = req.query().get("sessionId");
+            String sessionId;
+            if (req.headers().contains(SESSION_ID_HEADER)) {
+                sessionId = req.headers().get(SESSION_ID_HEADER).values();
+            } else {
+                sessionId = req.query().get("sessionId");
+            }
             return sessions.get(sessionId);
         } catch (NoSuchElementException e) {
             return Optional.empty();
@@ -243,6 +284,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             return;
         }
         session.get().state(McpSession.State.INITIALIZED);
+        res.status(Status.ACCEPTED_202);
     }
 
     private void notificationCancelRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -250,18 +292,29 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
 
     private void initializeRpc(JsonRpcRequest req, JsonRpcResponse res) {
         Optional<McpSession> foundSession = findSession(req);
-        if (foundSession.isEmpty()) {
-            res.status(Status.NOT_FOUND_404).send();
-            return;
-        }
-        McpSession session = foundSession.get();
 
-        if (session.state() == UNINITIALIZED) {
-            session.state(INITIALIZING);
+        // is this streamable HTTP?
+        if (foundSession.isEmpty()) {
+            // create a new session
+            String sessionId = UUID.randomUUID().toString();
+            McpSession session = new McpSession();
+            sessions.put(sessionId, session);
+
+            // parse capabilities and update response
             McpParameters params = new McpParameters(req.params(), req.params().asJsonObject());
             parseClientCapabilities(session, params);
+            res.header(SESSION_ID_HEADER, sessionId);
+            res.result(McpJsonRpc.toJson(PROTOCOL_VERSION, capabilities, config));
+            res.send();
+        } else {
+            McpSession session = foundSession.get();
+            if (session.state() == UNINITIALIZED) {
+                session.state(INITIALIZING);
+                McpParameters params = new McpParameters(req.params(), req.params().asJsonObject());
+                parseClientCapabilities(session, params);
+            }
+            session.send(res.result(McpJsonRpc.toJson(PROTOCOL_VERSION, capabilities, config)));
         }
-        session.send(res.result(McpJsonRpc.toJson(PROTOCOL_VERSION, capabilities, config)));
     }
 
     private void parseClientCapabilities(McpSession session, McpParameters parameters) {
@@ -285,7 +338,13 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             res.status(Status.NOT_FOUND_404).send();
             return;
         }
-        foundSession.get().send(res.result(JsonValue.EMPTY_JSON_OBJECT));
+
+        res.result(JsonValue.EMPTY_JSON_OBJECT);
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            foundSession.get().send(res);
+        }
     }
 
     private void toolsListRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -294,7 +353,13 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             res.status(Status.NOT_FOUND_404).send();
             return;
         }
-        foundSession.get().send(res.result(McpJsonRpc.listTools(tools.values())));
+
+        res.result(McpJsonRpc.listTools(tools.values()));
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            foundSession.get().send(res);
+        }
     }
 
     private void toolsCallRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -334,11 +399,13 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             res.status(Status.NOT_FOUND_404).send();
             return;
         }
-        McpSession session = foundSession.get();
-        List<McpResource> resourceList = resources.values().stream()
-                .filter(this::isNotTemplate)
-                .toList();
-        session.send(res.result(McpJsonRpc.listResources(resourceList)));
+
+        res.result(McpJsonRpc.listResources(resources.values()));
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            foundSession.get().send(res);
+        }
     }
 
     private void resourcesReadRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -386,8 +453,13 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             res.status(Status.NOT_FOUND_404).send();
             return;
         }
-        McpSession session = foundSession.get();
-        session.send(res.result(McpJsonRpc.listResourceTemplates(resourceTemplates.values())));
+
+        res.result(McpJsonRpc.listResourceTemplates(resourceTemplates.values()));
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            foundSession.get().send(res);
+        }
     }
 
     private void promptsListRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -396,8 +468,13 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             res.status(Status.NOT_FOUND_404).send();
             return;
         }
-        McpSession session = foundSession.get();
-        session.send(res.result(McpJsonRpc.listPrompts(prompts.values())));
+
+        res.result(McpJsonRpc.listPrompts(prompts.values()));
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            foundSession.get().send(res);
+        }
     }
 
     private void promptsGetRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -443,14 +520,20 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             res.status(Status.NOT_FOUND_404).send();
             return;
         }
-        McpSession session = foundSession.get();
 
+        McpSession session = foundSession.get();
         McpParameters parameters = new McpParameters(req.params(), req.params().asJsonObject());
         parameters.get("level").asString().ifPresent(level -> {
             McpLogger.Level logLevel = McpLogger.Level.valueOf(level.toUpperCase());
             session.features().logger().setLevel(logLevel);
         });
-        session.send(res.result(McpJsonRpc.empty()));
+
+        res.result(McpJsonRpc.empty());
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            session.send(res);
+        }
     }
 
     private void completionRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -492,19 +575,9 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     }
 
     private void enableProgress(McpSession session, McpParameters parameters) {
-        var progressToken = parameters.get("_meta").get("progressToken");
-        if (progressToken.isEmpty()) {
-            return;
-        }
-        if (progressToken.isNumber()) {
-            session.features()
-                    .progress()
-                    .token(progressToken.asInteger().get());
-        }
-        if (progressToken.isString()) {
-            session.features()
-                    .progress()
-                    .token(progressToken.asString().get());
+        var token = parameters.get("_meta").get("progressToken").asString();
+        if (token.isPresent()) {
+            session.features().progress().token(token.get());
         }
     }
 
