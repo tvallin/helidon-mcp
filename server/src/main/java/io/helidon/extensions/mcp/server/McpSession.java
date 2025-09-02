@@ -32,6 +32,8 @@ import jakarta.json.JsonObject;
 import static io.helidon.extensions.mcp.server.McpSession.State.UNINITIALIZED;
 
 class McpSession {
+    private static final System.Logger LOGGER = System.getLogger(McpSession.class.getName());
+
     private final McpFeatures features;
     private final Set<McpCapability> capabilities;
     private final AtomicBoolean active = new AtomicBoolean(true);
@@ -64,6 +66,7 @@ class McpSession {
 
     void send(JsonObject message) {
         try {
+            LOGGER.log(System.Logger.Level.INFO, String.format("Sending message: %s", message));
             queue.put(message);
         } catch (InterruptedException e) {
             throw new UncheckedException(e);
@@ -71,6 +74,7 @@ class McpSession {
     }
 
     void send(JsonRpcResponse response) {
+        LOGGER.log(System.Logger.Level.INFO, String.format("Sending message: %s", response.asJsonObject()));
         send(response.status(Status.ACCEPTED_202).asJsonObject());
     }
 

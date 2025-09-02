@@ -406,8 +406,4 @@ final class McpJsonRpc {
     static JsonObject disconnectSession() {
         return JSON_BUILDER_FACTORY.createObjectBuilder().add("disconnect", true).build();
     }
-
-    public static JsonObject empty() {
-        return JSON_BUILDER_FACTORY.createObjectBuilder().build();
-    }
 }

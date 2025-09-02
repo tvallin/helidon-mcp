@@ -59,8 +59,7 @@ import static io.helidon.extensions.mcp.server.McpSession.State.UNINITIALIZED;
 @RuntimeType.PrototypedBy(McpServerConfig.class)
 public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpServerConfig> {
     private static final int SESSION_CACHE_SIZE = 1000;
-    private static final String PROTOCOL_VERSION = "2025-03-26";
-
+    private static final List<String> PROTOCOL_VERSION = List.of("2024-11-05", "2025-03-26");
     private static final HeaderName SESSION_ID_HEADER = HeaderNames.create("Mcp-Session-Id");
 
     private final String endpoint;
@@ -303,18 +302,32 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             // parse capabilities and update response
             McpParameters params = new McpParameters(req.params(), req.params().asJsonObject());
             parseClientCapabilities(session, params);
+            String version = parseClientVersion(params);
             res.header(SESSION_ID_HEADER, sessionId);
-            res.result(McpJsonRpc.toJson(PROTOCOL_VERSION, capabilities, config));
+            res.result(McpJsonRpc.toJson(version, capabilities, config));
             res.send();
-        } else {
-            McpSession session = foundSession.get();
-            if (session.state() == UNINITIALIZED) {
-                session.state(INITIALIZING);
-                McpParameters params = new McpParameters(req.params(), req.params().asJsonObject());
-                parseClientCapabilities(session, params);
-            }
-            session.send(res.result(McpJsonRpc.toJson(PROTOCOL_VERSION, capabilities, config)));
+            return;
         }
+
+        McpSession session = foundSession.get();
+        McpParameters params = new McpParameters(req.params(), req.params().asJsonObject());
+        String version = parseClientVersion(params);
+        parseClientCapabilities(session, params);
+        if (session.state() == UNINITIALIZED) {
+            session.state(INITIALIZING);
+        }
+        session.send(res.result(McpJsonRpc.toJson(version, capabilities, config)));
+    }
+
+    private String parseClientVersion(McpParameters parameters) {
+        McpParameters protocolVersion = parameters.get("protocolVersion");
+        if (protocolVersion.isPresent()) {
+            String version = protocolVersion.asString().get();
+            if (PROTOCOL_VERSION.contains(version)) {
+                return version;
+            }
+        }
+        return PROTOCOL_VERSION.getLast();
     }
 
     private void parseClientCapabilities(McpSession session, McpParameters parameters) {
@@ -390,7 +403,12 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                                .features(session.features())
                                .build());
         session.features().progress().stopSending();
-        session.send(res.result(McpJsonRpc.toolCall(contents).build()));
+        res.result(McpJsonRpc.toolCall(contents).build());
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            session.send(res);
+        }
     }
 
     private void resourcesListRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -438,7 +456,13 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                                                                                     .features(session.features())
                                                                                     .build());
         session.features().progress().stopSending();
-        session.send(res.result(McpJsonRpc.readResource(resourceUri, contents)));
+        var content = McpJsonRpc.readResource(resourceUri, contents);
+        res.result(content);
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            session.send(res);
+        }
     }
 
     private void resourceSubscribeRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -511,7 +535,12 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                                .features(session.features())
                                .build());
         session.features().progress().stopSending();
-        session.send(res.result(McpJsonRpc.toJson(contents, prompt.get().description())));
+        res.result(McpJsonRpc.toJson(contents, prompt.get().description()));
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            session.send(res);
+        }
     }
 
     private void loggingLogLevelRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -528,7 +557,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             session.features().logger().setLevel(logLevel);
         });
 
-        res.result(McpJsonRpc.empty());
+        res.result(JsonValue.EMPTY_JSON_OBJECT);
         if (isStreamableHttp(req.headers())) {
             res.send();
         } else {
@@ -559,7 +588,12 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                                .parameters(parameters.get("argument"))
                                .features(session.features())
                                .build());
-        session.send(res.result(McpJsonRpc.toJson(result)));
+        res.result(McpJsonRpc.toJson(result));
+        if (isStreamableHttp(req.headers())) {
+            res.send();
+        } else {
+            session.send(res);
+        }
     }
 
     private String parseCompletionName(McpParameters completion) {
@@ -575,9 +609,19 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     }
 
     private void enableProgress(McpSession session, McpParameters parameters) {
-        var token = parameters.get("_meta").get("progressToken").asString();
-        if (token.isPresent()) {
-            session.features().progress().token(token.get());
+        var progressToken = parameters.get("_meta").get("progressToken");
+        if (progressToken.isEmpty()) {
+            return;
+        }
+        if (progressToken.isNumber()) {
+            session.features()
+                    .progress()
+                    .token(progressToken.asInteger().get());
+        }
+        if (progressToken.isString()) {
+            session.features()
+                    .progress()
+                    .token(progressToken.asString().get());
         }
     }
 
