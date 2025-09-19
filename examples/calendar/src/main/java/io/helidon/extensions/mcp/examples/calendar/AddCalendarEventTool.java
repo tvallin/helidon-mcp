@@ -28,36 +28,12 @@ import io.helidon.extensions.mcp.server.McpRequest;
 import io.helidon.extensions.mcp.server.McpTool;
 import io.helidon.extensions.mcp.server.McpToolContent;
 import io.helidon.extensions.mcp.server.McpToolContents;
+import io.helidon.json.schema.Schema;
 
 /**
  * MCP tool to add a new Event to the calendar.
  */
 final class AddCalendarEventTool implements McpTool {
-    private static final String SCHEMA = """
-            {
-                "type": "object",
-                "description": "Description of a new Event",
-                "properties": {
-                    "name": {
-                        "description": "Event name",
-                        "type": "string"
-                    },
-                    "date": {
-                        "description": "Event date in the following format YYYY-MM-DD",
-                        "type": "string"
-                    },
-                    "attendees": {
-                        "description": "Event attendees",
-                        "type": "array",
-                        "items": {
-                            "type": "string"
-                        },
-                        "minItems": 1
-                    }
-                },
-                "required": [ "name", "date", "attendees" ]
-            }
-            """;
     private final Calendar calendar;
 
     AddCalendarEventTool(Calendar calendar) {
@@ -76,7 +52,19 @@ final class AddCalendarEventTool implements McpTool {
 
     @Override
     public String schema() {
-        return SCHEMA;
+        return Schema.builder()
+                .rootObject(root -> root
+                        .description("Description of a new Event")
+                        .addStringProperty("name", name -> name.description("Event name")
+                                .required(true))
+                        .addStringProperty("date", date -> date.description("Event date in the following format YYYY-MM-DD")
+                                .required(true))
+                        .addArrayProperty("attendees", attendees -> attendees.description("Event attendees")
+                                .minItems(1)
+                                .itemsString(item -> item.description("Attendees name"))
+                                .required(true)))
+                .build()
+                .generate();
     }
 
     @Override

@@ -44,6 +44,7 @@ import io.helidon.extensions.mcp.server.McpRole;
 import io.helidon.extensions.mcp.server.McpServerConfig;
 import io.helidon.extensions.mcp.server.McpTool;
 import io.helidon.extensions.mcp.server.McpToolContents;
+import io.helidon.service.registry.Services;
 import io.helidon.webserver.http.HttpFeature;
 import io.helidon.webserver.http.HttpRouting;
 
@@ -123,6 +124,7 @@ class McpTypesTest {
         checkField(toCheck, checked, fields, "HELIDON_MEDIA_TYPES", MediaTypes.class);
         checkField(toCheck, checked, fields, "HTTP_ROUTING_BUILDER", HttpRouting.Builder.class);
 
+        checkField(toCheck, checked, fields, "SERVICES", Services.class);
         checkField(toCheck, checked, fields, "SET_MCP_PROMPT_ARGUMENT", Set.class);
         checkField(toCheck, checked, fields, "FUNCTION_REQUEST_COMPLETION_CONTENT", Function.class);
         checkField(toCheck, checked, fields, "FUNCTION_REQUEST_LIST_RESOURCE_CONTENT", Function.class);

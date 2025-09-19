@@ -40,6 +40,7 @@ import io.helidon.common.types.TypedElementInfo;
 
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_DESCRIPTION;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_JSON_SCHEMA;
+import static io.helidon.extensions.mcp.codegen.McpTypes.SERVICES;
 import static io.helidon.service.codegen.ServiceCodegenTypes.SERVICE_ANNOTATION_SINGLETON;
 
 /**
@@ -169,12 +170,13 @@ class McpJsonSchemaCodegen implements CodegenExtension {
             return;
         }
 
-
         method.addContent("builder.append(\"\\\"")
                 .addContent(element.elementName())
                 .addContent("\\\": \" + ")
+                .addContent(SERVICES)
+                .addContent(".get(")
                 .addContent(mapElementName(element))
-                .addContentLine(".schema());");
+                .addContentLine(".class).jsonSchema());");
     }
 
     private static void addDescription(Method.Builder method, String description) {
@@ -196,9 +198,7 @@ class McpJsonSchemaCodegen implements CodegenExtension {
     }
 
     static String mapElementName(TypedElementInfo element) {
-        return element.typeName().classNameWithEnclosingNames()
-                .replace('.', '_')
-                + "__JsonSchema";
+        return element.typeName().className().replace('.', '_') + "__JsonSchema";
     }
 
     static String mapTypeName(TypeName typeName) {
