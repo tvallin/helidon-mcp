@@ -16,6 +16,7 @@
 package io.helidon.extensions.mcp.server;
 
 import io.helidon.builder.api.Prototype;
+import io.helidon.common.context.Context;
 
 /**
  * A representation of an MCP request.
@@ -43,4 +44,10 @@ interface McpRequestBlueprint {
      * @return the protocol version
      */
     String protocolVersion();
+
+    /**
+     *
+     * @return request context
+     */
+    Context context();
 }
