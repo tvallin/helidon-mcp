@@ -39,6 +39,7 @@
     </properties>
 
     <modules>
+        <module>coffee-shop-manager</module>
         <module>weather-application</module>
         <module>secured-server</module>
         <module>calendar</module>
