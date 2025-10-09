@@ -18,6 +18,24 @@ server:
   port: 8081
   host: 0.0.0.0
 
+properties:
+  username: "changeit"
+  password: "changeit"
+  url: "changeit"
+
+data:
+  persistence-units:
+    jakarta:
+      - connection:
+          username: "${properties.username}"
+          password: "${properties.password}"
+          url: "${properties.url}"
+          jdbc-driver-class-name: "oracle.jdbc.OracleDriver"
+        properties:
+          eclipselink.target-database: "Oracle"
+          eclipselink.target-server: "None"
+          jakarta.persistence.schema-generation.database.action: "none"
+
 mcp:
   server:
     name: "mcp-server-coffee-shop"
