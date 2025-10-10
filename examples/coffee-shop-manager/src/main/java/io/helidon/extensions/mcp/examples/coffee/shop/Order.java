@@ -17,23 +17,20 @@
 package io.helidon.extensions.mcp.examples.coffee.shop;
 
 import java.math.BigDecimal;
+import java.util.ArrayList;
+import java.util.List;
 
 import de.huxhorn.sulky.ulid.ULID;
 import jakarta.persistence.Column;
 import jakarta.persistence.Entity;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.Transient;
 
-/**
- * Represents a menu item in the coffee shop.
- * <p>
- * A menu item includes details such as its name, description, category, price,
- * tags, and optional add-ons.
- */
 @Entity
-@Table(name = "MENU")
+@Table(name = "ORDERS")
+public class Order {
 
-public class MenuItem {
     @Id
     @Column(name = "ID")
     String id;
@@ -41,27 +38,33 @@ public class MenuItem {
     @Column(name = "NAME")
     String name;
 
-    @Column(name = "DESCRIPTION")
-    String description;
-
-    @Column(name = "CATEGORY")
-    String category;
+    @Column(name = "CONTENT")
+    String content;
 
     @Column(name = "PRICE")
     BigDecimal price;
 
-    @Column(name = "TAGS")
-    String tags;
+    @Transient
+    List<MenuItem> items;
 
-    @Column(name = "ADDONS")
-    String addOns;
-
-    public MenuItem() {
+    public Order() {
         this.id = new ULID().nextULID();
     }
 
-    public MenuItem(String id) {
-        this.id = id;
+    public Order(String name, String content) {
+        this.id = new ULID().nextULID();
+        this.name = name;
+        this.content = content;
+        this.price = BigDecimal.ZERO;
+        this.items = new ArrayList<>();
+    }
+
+    public Order(String name, String content, BigDecimal price, List<MenuItem> items) {
+        this.id = new ULID().nextULID();
+        this.name = name;
+        this.price = price;
+        this.items = items;
+        this.content = content;
     }
 
     public String getId() {
@@ -80,20 +83,12 @@ public class MenuItem {
         this.name = name;
     }
 
-    public String getDescription() {
-        return description;
+    public String getContent() {
+        return content;
     }
 
-    public void setDescription(String description) {
-        this.description = description;
-    }
-
-    public String getCategory() {
-        return category;
-    }
-
-    public void setCategory(String category) {
-        this.category = category;
+    public void setContent(String content) {
+        this.content = content;
     }
 
     public BigDecimal getPrice() {
@@ -102,21 +97,5 @@ public class MenuItem {
 
     public void setPrice(BigDecimal price) {
         this.price = price;
-    }
-
-    public String getTags() {
-        return tags;
-    }
-
-    public void setTags(String tags) {
-        this.tags = tags;
-    }
-
-    public String getAddOns() {
-        return addOns;
-    }
-
-    public void setAddOns(String addOns) {
-        this.addOns = addOns;
     }
 }

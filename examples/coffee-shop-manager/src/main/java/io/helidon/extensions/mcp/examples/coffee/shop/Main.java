@@ -49,6 +49,8 @@ public class Main {
         var config = Services.get(Config.class);
         builder.addFeature(McpServerFeature.builder()
                                    .config(config.get("mcp.server"))
+                                   .addTool(new TakeOrderTool())
+                                   .addTool(new ListOrdersTool())
                                    .addTool(new MenuManagerTool())
                                    .build());
     }

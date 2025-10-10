@@ -1,3 +1,19 @@
+/*
+ * Copyright (c) 2025 Oracle and/or its affiliates.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package io.helidon.extensions.mcp.examples.coffee.shop;
 
 import java.util.List;
@@ -49,12 +65,22 @@ class Langchain4jTest {
     @Test
     void testListTools() {
         List<ToolSpecification> tools = client.listTools();
-        assertThat(tools.size(), is(1));
+        assertThat(tools.size(), is(3));
 
-        ToolSpecification tool1 = tools.getFirst();
-        assertThat(tool1.name(), is("menu-manager"));
-        assertThat(tool1.description(), is("Provides a list of coffee"));
-        assertThat(tool1.parameters().properties().isEmpty(), is(true));
+        ToolSpecification takingOrder = tools.getFirst();
+        assertThat(takingOrder.name(), is("take-order-manager"));
+        assertThat(takingOrder.description(), is("Take an order"));
+        assertThat(takingOrder.parameters().properties().isEmpty(), is(false));
+
+        ToolSpecification orderManager = tools.get(1);
+        assertThat(orderManager.name(), is("order-manager"));
+        assertThat(orderManager.description(), is("Give the list of orders"));
+        assertThat(orderManager.parameters().properties().isEmpty(), is(true));
+
+        ToolSpecification menuManager = tools.get(2);
+        assertThat(menuManager.name(), is("menu-manager"));
+        assertThat(menuManager.description(), is("Provides a list of coffee"));
+        assertThat(menuManager.parameters().properties().isEmpty(), is(true));
     }
 
     @Test
@@ -64,5 +90,14 @@ class Langchain4jTest {
                                                 .build());
         assertThat(result.isError(), is(false));
         assertThat(result.resultText(), containsString("Latte"));
+    }
+
+    @Test
+    void testOrderManager() {
+        var result = client.executeTool(ToolExecutionRequest.builder()
+                                                .name("order-manager")
+                                                .build());
+        assertThat(result.isError(), is(false));
+        assertThat(result.resultText(), containsString("content"));
     }
 }
