@@ -39,7 +39,7 @@ class MenuManagerTool implements McpTool {
 
     @Override
     public String description() {
-        return "Provides a list of coffee";
+        return "Provides the coffee shop menu";
     }
 
     @Override

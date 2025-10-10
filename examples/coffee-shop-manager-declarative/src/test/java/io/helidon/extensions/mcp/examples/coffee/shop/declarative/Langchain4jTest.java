@@ -14,14 +14,12 @@
  * limitations under the License.
  */
 
-package io.helidon.extensions.mcp.examples.coffee.shop;
+package io.helidon.extensions.mcp.examples.coffee.shop.declarative;
 
 import java.util.List;
 
 import io.helidon.webserver.WebServer;
-import io.helidon.webserver.http.HttpRouting;
 import io.helidon.webserver.testing.junit5.ServerTest;
-import io.helidon.webserver.testing.junit5.SetUpRoute;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
@@ -29,7 +27,6 @@ import dev.langchain4j.mcp.client.DefaultMcpClient;
 import dev.langchain4j.mcp.client.McpClient;
 import dev.langchain4j.mcp.client.transport.McpTransport;
 import dev.langchain4j.mcp.client.transport.http.HttpMcpTransport;
-import dev.langchain4j.mcp.client.transport.http.StreamableHttpMcpTransport;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.Test;
 
@@ -52,11 +49,6 @@ class Langchain4jTest {
                 .build();
     }
 
-    @SetUpRoute
-    static void routing(HttpRouting.Builder builder) {
-        Main.setUpRoute(builder);
-    }
-
     @AfterAll
     static void closeClient() throws Exception {
         client.close();
@@ -67,18 +59,18 @@ class Langchain4jTest {
         List<ToolSpecification> tools = client.listTools();
         assertThat(tools.size(), is(3));
 
-        ToolSpecification takingOrder = tools.getFirst();
-        assertThat(takingOrder.name(), is("take-order-manager"));
+        ToolSpecification takingOrder = tools.get(2);
+        assertThat(takingOrder.name(), is("takeOrder"));
         assertThat(takingOrder.description(), is("Take an order"));
         assertThat(takingOrder.parameters().properties().isEmpty(), is(false));
 
         ToolSpecification orderManager = tools.get(1);
-        assertThat(orderManager.name(), is("order-manager"));
+        assertThat(orderManager.name(), is("listOrders"));
         assertThat(orderManager.description(), is("Give the list of orders"));
         assertThat(orderManager.parameters().properties().isEmpty(), is(true));
 
-        ToolSpecification menuManager = tools.get(2);
-        assertThat(menuManager.name(), is("menu-manager"));
+        ToolSpecification menuManager = tools.getFirst();
+        assertThat(menuManager.name(), is("getMenu"));
         assertThat(menuManager.description(), is("Provides the coffee shop menu"));
         assertThat(menuManager.parameters().properties().isEmpty(), is(true));
     }
@@ -86,7 +78,7 @@ class Langchain4jTest {
     @Test
     void testMenuManager() {
         var result = client.executeTool(ToolExecutionRequest.builder()
-                                                .name("menu-manager")
+                                                .name("getMenu")
                                                 .build());
         assertThat(result.isError(), is(false));
         assertThat(result.resultText(), containsString("Latte"));
@@ -95,7 +87,7 @@ class Langchain4jTest {
     @Test
     void testOrderManager() {
         var result = client.executeTool(ToolExecutionRequest.builder()
-                                                .name("order-manager")
+                                                .name("listOrders")
                                                 .build());
         assertThat(result.isError(), is(false));
         assertThat(result.resultText(), containsString("content"));
