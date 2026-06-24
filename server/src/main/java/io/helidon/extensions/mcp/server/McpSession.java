@@ -19,23 +19,26 @@ import java.lang.System.Logger.Level;
 import java.time.Duration;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 
 import io.helidon.common.LazyValue;
 import io.helidon.common.LruCache;
-import io.helidon.common.UncheckedException;
 import io.helidon.common.context.Context;
 import io.helidon.webserver.http.ServerResponse;
 import io.helidon.webserver.jsonrpc.JsonRpcRequest;
 import io.helidon.webserver.jsonrpc.JsonRpcResponse;
 
+import jakarta.json.JsonNumber;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonValue;
 
@@ -56,7 +59,7 @@ class McpSession {
     private final LruCache<JsonValue, McpTransport> transports;
     private final LazyValue<McpSessionFeatures> sessionFeatures;
     private final AtomicBoolean active = new AtomicBoolean(true);
-    private final BlockingQueue<JsonObject> responses = new LinkedBlockingQueue<>();
+    private final Map<Long, CompletableFuture<JsonObject>> responses = new ConcurrentHashMap<>();
 
     private McpJsonSerializer serializer;
     private volatile State state = UNINITIALIZED;
@@ -124,10 +127,19 @@ class McpSession {
     }
 
     void acceptResponse(JsonObject response) {
-        try {
-            responses.put(response);
-        } catch (InterruptedException e) {
-            throw new UncheckedException(e);
+        JsonValue idValue = response.get("id");
+        if (!(idValue instanceof JsonNumber idNumber)) {
+            if (LOGGER.isLoggable(Level.TRACE)) {
+                LOGGER.log(Level.TRACE, "Received a response with wrong request id type");
+            }
+            return;
+        }
+        long id = idNumber.longValue();
+        CompletableFuture<JsonObject> future = responses.get(id);
+        if (future != null) {
+            future.complete(response);
+        } else if (LOGGER.isLoggable(Level.TRACE)) {
+            LOGGER.log(Level.TRACE, "Received a response for an unknown request id " + id);
         }
     }
 
@@ -140,29 +152,26 @@ class McpSession {
     }
 
     JsonObject pollResponse(long requestId, Duration timeout) {
-        while (active.get()) {
-            try {
-                JsonObject response = responses.poll(timeout.toMillis(), TimeUnit.MILLISECONDS);
-                if (response != null) {
-                    if (LOGGER.isLoggable(System.Logger.Level.DEBUG)) {
-                        LOGGER.log(System.Logger.Level.DEBUG, "Response:\n" + prettyPrint(response));
-                    }
-                    long id = response.getJsonNumber("id").longValue();
-                    if (id == requestId) {
-                        return response;
-                    }
-                } else {
-                    return serializer.jsonrpcErrorTimeoutResponse(requestId);
-                }
-            } catch (ClassCastException e) {
-                if (LOGGER.isLoggable(Level.TRACE)) {
-                    LOGGER.log(Level.TRACE, "Received a response with wrong request id type", e);
-                }
-            } catch (InterruptedException e) {
-                throw new McpInternalException("Session interrupted.", e);
-            }
+        if (!active.get()) {
+            throw new McpInternalException("Session disconnected");
         }
-        throw new McpInternalException("Session disconnected");
+        CompletableFuture<JsonObject> response = responses.computeIfAbsent(requestId, id -> new CompletableFuture<>());
+        try {
+            JsonObject result = response.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
+            if (LOGGER.isLoggable(System.Logger.Level.DEBUG)) {
+                LOGGER.log(System.Logger.Level.DEBUG, "Response:\n" + prettyPrint(result));
+            }
+            return result;
+        } catch (TimeoutException e) {
+            return serializer.jsonrpcErrorTimeoutResponse(requestId);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new McpInternalException("Session interrupted.", e);
+        } catch (ExecutionException e) {
+            throw new McpInternalException("Error while waiting for a response.", e);
+        } finally {
+            responses.remove(requestId);
+        }
     }
 
     /**
@@ -172,7 +181,9 @@ class McpSession {
      * @return a new request id
      */
     long jsonRpcId() {
-        return jsonRpcId.getAndIncrement();
+        long id = jsonRpcId.getAndIncrement();
+        responses.put(id, new CompletableFuture<>());
+        return id;
     }
 
     void clearRequest(JsonValue requestId) {
