@@ -57,6 +57,7 @@ import io.helidon.extensions.mcp.server.McpRoots;
 import io.helidon.extensions.mcp.server.McpSampling;
 import io.helidon.extensions.mcp.server.McpServerConfig;
 import io.helidon.extensions.mcp.server.McpSubscribeRequest;
+import io.helidon.extensions.mcp.server.McpTaskSupport;
 import io.helidon.extensions.mcp.server.McpTool;
 import io.helidon.extensions.mcp.server.McpToolAnnotations;
 import io.helidon.extensions.mcp.server.McpToolRequest;
@@ -113,6 +114,7 @@ class McpTypesTest {
         checkField(toCheck, checked, fields, "MCP_NAME", Mcp.Name.class);
         checkField(toCheck, checked, fields, "MCP_PATH", Mcp.Path.class);
         checkField(toCheck, checked, fields, "MCP_TOOL", Mcp.Tool.class);
+        checkField(toCheck, checked, fields, "MCP_TASK_SUPPORT", Mcp.TaskSupport.class);
         checkField(toCheck, checked, fields, "MCP_ROLE", Mcp.Role.class);
         checkField(toCheck, checked, fields, "MCP_SERVER", Mcp.Server.class);
         checkField(toCheck, checked, fields, "MCP_PROMPT", Mcp.Prompt.class);
@@ -139,6 +141,7 @@ class McpTypesTest {
         checkField(toCheck, checked, fields, "MCP_TOOL_INTERFACE", McpTool.class);
         checkField(toCheck, checked, fields, "MCP_PARAMETERS", McpParameters.class);
         checkField(toCheck, checked, fields, "MCP_TOOL_RESULT", McpToolResult.class);
+        checkField(toCheck, checked, fields, "MCP_TASK_SUPPORT_ENUM", McpTaskSupport.class);
         checkField(toCheck, checked, fields, "MCP_PROMPT_INTERFACE", McpPrompt.class);
         checkField(toCheck, checked, fields, "MCP_CANCELLATION", McpCancellation.class);
         checkField(toCheck, checked, fields, "MCP_SERVER_CONFIG", McpServerConfig.class);

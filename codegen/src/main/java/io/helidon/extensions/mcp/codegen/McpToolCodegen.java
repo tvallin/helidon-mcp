@@ -46,6 +46,8 @@ import static io.helidon.extensions.mcp.codegen.McpJsonSchemaCodegen.addSchemaMe
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_DESCRIPTION;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_NAME;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_REQUIRED;
+import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_TASK_SUPPORT;
+import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_TASK_SUPPORT_ENUM;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_TOOL;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_TOOL_INTERFACE;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_TOOL_OUTPUT_SCHEMA;
@@ -77,6 +79,7 @@ class McpToolCodegen {
                     .accessModifier(AccessModifier.PRIVATE)
                     .addMethod(method -> addToolNameMethod(method, element))
                     .addMethod(method -> addToolDescriptionMethod(method, description))
+                    .addMethod(method -> addToolTaskSupportMethod(method, element))
                     .addMethod(method -> addToolSchemaMethod(method, element))
                     .addMethod(method -> addToolMethod(method, classModel, element))
                     .addMethod(method -> addToolAnnotationsMethod(method, toolAnnotation))
@@ -291,6 +294,20 @@ class McpToolCodegen {
                 .returnType(TypeNames.STRING)
                 .addContent("return ")
                 .addContentLiteral(description)
+                .addContentLine(";");
+    }
+
+    private void addToolTaskSupportMethod(Method.Builder builder, TypedElementInfo element) {
+        String enumValue = element.findAnnotation(MCP_TASK_SUPPORT)
+                .flatMap(Annotation::value)
+                .orElse("FORBIDDEN");
+        builder.name("taskSupport")
+                .addAnnotation(Annotations.OVERRIDE)
+                .returnType(MCP_TASK_SUPPORT_ENUM)
+                .addContent("return ")
+                .addContent(MCP_TASK_SUPPORT_ENUM)
+                .addContent(".")
+                .addContent(enumValue)
                 .addContentLine(";");
     }
 

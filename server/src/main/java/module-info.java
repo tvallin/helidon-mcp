@@ -26,6 +26,7 @@ import io.helidon.common.features.api.HelidonFlavor;
 @Features.Flavor({HelidonFlavor.SE, HelidonFlavor.MP})
 module io.helidon.extensions.mcp.server {
     requires io.helidon.common;
+    requires io.helidon.common.security;
     requires io.helidon.json;
     requires io.helidon.json.binding;
     requires io.helidon.webserver.sse;

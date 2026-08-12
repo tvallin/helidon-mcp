@@ -82,4 +82,13 @@ public interface McpTool {
     default Optional<String> outputSchema() {
         return Optional.empty();
     }
+
+    /**
+     * Task-augmented execution support for this tool.
+     *
+     * @return task support
+     */
+    default McpTaskSupport taskSupport() {
+        return McpTaskSupport.FORBIDDEN;
+    }
 }

@@ -34,6 +34,7 @@ final class McpTypes {
     static final TypeName MCP_PATH = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Path");
     static final TypeName MCP_ROLE = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Role");
     static final TypeName MCP_TOOL = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Tool");
+    static final TypeName MCP_TASK_SUPPORT = TypeName.create("io.helidon.extensions.mcp.server.Mcp.TaskSupport");
     static final TypeName MCP_SERVER = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Server");
     static final TypeName MCP_PROMPT = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Prompt");
     static final TypeName MCP_VERSION = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Version");
@@ -65,6 +66,7 @@ final class McpTypes {
     static final TypeName MCP_TOOL_INTERFACE = TypeName.create("io.helidon.extensions.mcp.server.McpTool");
     static final TypeName MCP_PARAMETERS = TypeName.create("io.helidon.extensions.mcp.server.McpParameters");
     static final TypeName MCP_TOOL_RESULT = TypeName.create("io.helidon.extensions.mcp.server.McpToolResult");
+    static final TypeName MCP_TASK_SUPPORT_ENUM = TypeName.create("io.helidon.extensions.mcp.server.McpTaskSupport");
     static final TypeName MCP_ELICITATION = TypeName.create("io.helidon.extensions.mcp.server.McpElicitation");
     static final TypeName MCP_PROMPT_INTERFACE = TypeName.create("io.helidon.extensions.mcp.server.McpPrompt");
     static final TypeName MCP_TOOL_REQUEST = TypeName.create("io.helidon.extensions.mcp.server.McpToolRequest");

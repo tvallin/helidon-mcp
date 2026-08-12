@@ -16,12 +16,7 @@
 
 package io.helidon.extensions.mcp.server;
 
-import java.util.Collection;
 import java.util.List;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.stream.Collectors;
 
 import io.helidon.json.JsonString;
 import io.helidon.jsonrpc.core.JsonRpcParams;
@@ -47,72 +42,55 @@ import io.helidon.jsonrpc.core.JsonRpcParams;
  *         {@link McpJsonSerializer#METHOD_RESOURCES_TEMPLATES_LIST}
  *         List the resource templates registered on the server.
  *     </li>
+ *     <li>
+ *         {@link McpJsonSerializer#METHOD_TASKS_LIST}
+ *         List the tasks created on the server.
+ *     </li>
  * </ul>
  * <p>
  * Pagination enables the server to return results in smaller, manageable chunks rather than
  * delivering the entire dataset at once. The size of each chunk is configured via the {@code page-size}
- * property. This class maintains a map of pages, where each key represents a unique cursor associated
- * with a specific page. Each page also contains a cursor pointing to the next page in the sequence.
+ * property. {@link McpStaticPagination} provides opaque cursors for fixed component lists, while
+ * {@link McpMutablePagination} uses task identifiers as cursors for refreshed task lists.
  *
  * @param <T> MCP components type
  */
-class McpPagination<T> {
-    static final int DEFAULT_PAGE_SIZE = 0;
-    private final ConcurrentMap<String, McpPage<T>> pages;
-    private final String initialCursor = UUID.randomUUID().toString();
+sealed interface McpPagination<T> permits McpStaticPagination, McpMutablePagination {
+    int DEFAULT_PAGE_SIZE = 0;
 
-    McpPagination(List<T> components, int pageSize) {
-        this.pages = new ConcurrentHashMap<>();
-        String prevCursor = initialCursor;
-        int total = components.size();
+    /**
+     * First page.
+     *
+     * @return first page
+     */
+    McpPage<T> firstPage();
 
-        if (components.isEmpty()) {
-            pages.put(prevCursor, new McpPage<>(List.of()));
-            return;
-        }
+    /**
+     * Page following the provided cursor.
+     *
+     * @param cursor cursor from the preceding page
+     * @return page, or {@code null} if the cursor is unknown
+     */
+    McpPage<T> page(String cursor);
 
-        // Pagination is disabled
-        if (pageSize == DEFAULT_PAGE_SIZE) {
-            pages.put(prevCursor, new McpPage<>(components));
-            return;
-        }
+    /**
+     * All content represented by this pagination instance.
+     *
+     * @return content
+     */
+    List<T> content();
 
-        for (int i = pageSize; i <= total; i += pageSize) {
-            String nextCursor = UUID.randomUUID().toString();
-            List<T> pageItems = components.subList(i - pageSize, i);
-            boolean isLast = (i == total);
-            String cursor = isLast ? "" : nextCursor;
-            pages.put(prevCursor, new McpPage<>(pageItems, cursor, isLast));
-            prevCursor = nextCursor;
-        }
-
-        if (total % pageSize != 0) {
-            int lastPageStart = total - (total % pageSize);
-            List<T> lastPage = components.subList(lastPageStart, total);
-            pages.put(prevCursor, new McpPage<>(lastPage));
-        }
-    }
-
-    McpPage<T> firstPage() {
-        return pages.get(initialCursor);
-    }
-
-    McpPage<T> page(String cursor) {
-        return pages.get(cursor);
-    }
-
-    McpPage<T> page(JsonRpcParams params) {
+    /**
+     * Page selected by the cursor request parameter, or the first page when no cursor is provided.
+     *
+     * @param params request parameters
+     * @return selected page
+     */
+    default McpPage<T> page(JsonRpcParams params) {
         return params.find("cursor")
                 .map(JsonString.class::cast)
                 .map(JsonString::value)
                 .map(this::page)
                 .orElse(this.firstPage());
-    }
-
-    List<T> content() {
-        return pages.values().stream()
-                .map(McpPage::components)
-                .flatMap(Collection::stream)
-                .collect(Collectors.toList());
     }
 }

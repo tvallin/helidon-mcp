@@ -17,6 +17,8 @@
 package io.helidon.extensions.mcp.server;
 
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import io.helidon.json.JsonNull;
@@ -55,18 +57,34 @@ class McpCancellationTest {
     }
 
     @Test
-    void testCancellationHook() {
+    void testCancellationHook() throws InterruptedException {
         AtomicInteger counter = new AtomicInteger();
+        CountDownLatch hookCalled = new CountDownLatch(1);
         String reason = "Process is taking too long";
         McpCancellation cancellation = new McpCancellation();
 
-        cancellation.registerCancellationHook(counter::getAndIncrement);
+        cancellation.registerCancellationHook(() -> {
+            counter.incrementAndGet();
+            hookCalled.countDown();
+        });
         cancellation.cancel(reason, JsonNull.instance());
         cancellation.cancel(reason, JsonNull.instance());
 
+        assertThat(hookCalled.await(5, TimeUnit.SECONDS), is(true));
         McpCancellationResult result = cancellation.result();
         assertThat(result.isRequested(), is(true));
         assertThat(result.reason(), is(Optional.of(reason)));
         assertThat(counter.get(), is(1));
+    }
+
+    @Test
+    void invokesHookRegisteredAfterCancellation() throws InterruptedException {
+        McpCancellation cancellation = new McpCancellation();
+        CountDownLatch hookCalled = new CountDownLatch(1);
+        cancellation.cancel("cancelled early", JsonNull.instance());
+
+        cancellation.registerCancellationHook(hookCalled::countDown);
+
+        assertThat(hookCalled.await(5, TimeUnit.SECONDS), is(true));
     }
 }

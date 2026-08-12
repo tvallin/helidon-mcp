@@ -165,7 +165,7 @@ class McpSamplingTest {
                     "stopReason": "endTurn"
                   }
                 }
-                """).readJsonObject());
+                """).readJsonObject(), Context.create());
         JsonRpcResponse response = mock(JsonRpcResponse.class);
         SseSink sink = mock(SseSink.class);
         when(response.sink(SseSink.TYPE)).thenReturn(sink);
@@ -1164,7 +1164,7 @@ class McpSamplingTest {
                     "stopReason": "endTurn"
                   }
                 }
-                """).readJsonObject());
+                """).readJsonObject(), Context.create());
         JsonRpcResponse response = mock(JsonRpcResponse.class);
         SseSink sink = mock(SseSink.class);
         when(response.sink(SseSink.TYPE)).thenReturn(sink);
@@ -1231,7 +1231,7 @@ class McpSamplingTest {
                     "stopReason": "%s"
                   }
                 }
-                """.formatted(id, id, content, stopReason)).readJsonObject());
+                """.formatted(id, id, content, stopReason)).readJsonObject(), Context.create());
     }
 
     private static List<JsonObject> sentSamplingRequests(SseSink sink, int count) {

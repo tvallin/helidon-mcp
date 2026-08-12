@@ -160,14 +160,14 @@ public final class McpSampling extends McpFeature {
             checkRequestActive();
             long id = session().jsonRpcId();
             JsonObject payload = session().serializer().createSamplingRequest(id, currentRequest, toolDefinitions);
-            session().prepareResponse(id);
+            session().prepareResponse(id, transport());
             McpSamplingResponse response;
             try {
                 transport().send(payload);
                 JsonObject jsonResponse = session().pollResponse(id, currentRequest.timeout());
                 response = session().serializer().createSamplingResponse(jsonResponse);
             } finally {
-                session().discardResponse(id);
+                finishRequest(id);
             }
             checkRequestActive();
             List<McpSamplingToolUseContent> toolUses = response.message().contents().stream()
@@ -262,6 +262,11 @@ public final class McpSampling extends McpFeature {
         if (features.cancellation().result().isRequested()) {
             throw new McpSamplingException("Sampling request cancelled");
         }
+    }
+
+    private void finishRequest(long requestId) {
+        session().discardResponse(requestId);
+        transport().clientResponseReceived(requestId);
     }
 
     private McpToolResult createToolErrorResult(String message) {

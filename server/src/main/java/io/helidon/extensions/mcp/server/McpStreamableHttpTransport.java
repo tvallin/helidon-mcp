@@ -18,6 +18,9 @@ package io.helidon.extensions.mcp.server;
 import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.Condition;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
 import io.helidon.http.HeaderValues;
 import io.helidon.http.sse.SseEvent;
@@ -32,7 +35,11 @@ final class McpStreamableHttpTransport implements McpTransport {
 
     private final CountDownLatch latch;
     private final JsonRpcResponse response;
+    private final Lock stateLock = new ReentrantLock();
+    private final Condition sinkCreated = stateLock.newCondition();
     private SseSink sseSink;
+    private boolean creatingSink;
+    private boolean closed;
 
     McpStreamableHttpTransport(JsonRpcResponse response) {
         this.response = response;
@@ -55,12 +62,13 @@ final class McpStreamableHttpTransport implements McpTransport {
         if (LOGGER.isLoggable(System.Logger.Level.DEBUG)) {
             LOGGER.log(System.Logger.Level.DEBUG, "Streamable Http:\n" + prettyPrint(response.asJsonObject()));
         }
-        if (sseSink != null) {
-            sseSink.emit(SseEvent.builder()
-                                 .name("message")
-                                 .data(response.asJsonObject().toString())
-                                 .build());
-            sseSink.close();
+        SseSink currentSink = currentSink();
+        if (currentSink != null) {
+            currentSink.emit(SseEvent.builder()
+                                     .name("message")
+                                     .data(response.asJsonObject().toString())
+                                     .build());
+            currentSink.close();
             return;
         }
         response.header(HeaderValues.CONTENT_TYPE_JSON);
@@ -90,15 +98,105 @@ final class McpStreamableHttpTransport implements McpTransport {
         latch.countDown();
     }
 
+    @Override
+    public void close() {
+        SseSink currentSink;
+        stateLock.lock();
+        try {
+            if (closed) {
+                return;
+            }
+            closed = true;
+            currentSink = sseSink;
+            sinkCreated.signalAll();
+        } finally {
+            stateLock.unlock();
+        }
+        latch.countDown();
+        if (currentSink != null) {
+            currentSink.close();
+        }
+    }
+
     boolean openedSseChannel() {
-        return sseSink != null;
+        stateLock.lock();
+        try {
+            return sseSink != null;
+        } finally {
+            stateLock.unlock();
+        }
     }
 
     private SseSink sink() {
-        if (sseSink == null) {
-            response.header(HeaderValues.CONTENT_TYPE_EVENT_STREAM);
-            sseSink = response.sink(SseSink.TYPE);
+        stateLock.lock();
+        try {
+            while (creatingSink && !closed) {
+                awaitSinkCreation();
+            }
+            if (closed) {
+                throw new McpInternalException("Streamable HTTP transport is closed");
+            }
+            if (sseSink != null) {
+                return sseSink;
+            }
+            creatingSink = true;
+        } finally {
+            stateLock.unlock();
         }
-        return sseSink;
+
+        SseSink createdSink;
+        try {
+            response.header(HeaderValues.CONTENT_TYPE_EVENT_STREAM);
+            createdSink = response.sink(SseSink.TYPE);
+        } catch (RuntimeException | Error e) {
+            stateLock.lock();
+            try {
+                creatingSink = false;
+                sinkCreated.signalAll();
+            } finally {
+                stateLock.unlock();
+            }
+            throw e;
+        }
+
+        stateLock.lock();
+        try {
+            creatingSink = false;
+            if (!closed) {
+                sseSink = createdSink;
+            }
+            sinkCreated.signalAll();
+            if (!closed) {
+                return createdSink;
+            }
+        } finally {
+            stateLock.unlock();
+        }
+        createdSink.close();
+        throw new McpInternalException("Streamable HTTP transport is closed");
+    }
+
+    private SseSink currentSink() {
+        stateLock.lock();
+        try {
+            while (creatingSink && !closed) {
+                awaitSinkCreation();
+            }
+            if (closed) {
+                throw new McpInternalException("Streamable HTTP transport is closed");
+            }
+            return sseSink;
+        } finally {
+            stateLock.unlock();
+        }
+    }
+
+    private void awaitSinkCreation() {
+        try {
+            sinkCreated.await();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new McpInternalException("Interrupted while opening streamable HTTP transport", e);
+        }
     }
 }

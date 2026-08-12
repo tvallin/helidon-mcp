@@ -15,23 +15,26 @@
  */
 package io.helidon.extensions.mcp.server;
 
-import io.helidon.webserver.jsonrpc.JsonRpcRequest;
-import io.helidon.webserver.jsonrpc.JsonRpcResponse;
+import java.util.Locale;
 
-interface McpTransportManager extends McpTransportLifecycle {
-
+/**
+ * Task-augmented execution support for an MCP tool.
+ */
+public enum McpTaskSupport {
     /**
-     * Create a new instance of {@link io.helidon.extensions.mcp.server.McpTransport}.
-     *
-     * @param request the request
-     * @param response the response
-     * @return an instance
+     * The tool does not support task-augmented execution.
      */
-    McpTransport create(JsonRpcRequest request, JsonRpcResponse response);
-
+    FORBIDDEN,
     /**
-     * Close persistent transport resources owned by this manager.
+     * The tool supports both direct and task-augmented execution.
      */
-    default void close() {
+    OPTIONAL,
+    /**
+     * The tool requires task-augmented execution when Tasks are negotiated.
+     */
+    REQUIRED;
+
+    String text() {
+        return name().toLowerCase(Locale.ROOT);
     }
 }

@@ -16,6 +16,12 @@
 
 package io.helidon.extensions.mcp.tests.declarative;
 
+import io.helidon.http.HeaderName;
+import io.helidon.http.HeaderNames;
+import io.helidon.http.HeaderValues;
+import io.helidon.json.JsonObject;
+import io.helidon.json.JsonParser;
+import io.helidon.webclient.http1.Http1Client;
 import io.helidon.webserver.WebServer;
 import io.helidon.webserver.testing.junit5.ServerTest;
 
@@ -31,9 +37,15 @@ import static org.hamcrest.Matchers.is;
 
 @ServerTest
 class McpSdkToolAnnotationsServerTest {
+    private static final HeaderName SESSION_ID_HEADER = HeaderNames.create("Mcp-Session-Id");
+    private static final HeaderName MCP_PROTOCOL_VERSION = HeaderNames.create("Mcp-Protocol-Version");
     private static McpSyncClient client;
+    private final Http1Client httpClient;
 
     McpSdkToolAnnotationsServerTest(WebServer server) {
+        httpClient = Http1Client.builder()
+                .baseUri("http://localhost:" + server.port())
+                .build();
         client = McpClient.sync(HttpClientStreamableHttpTransport.builder("http://localhost:" + server.port())
                                         .endpoint("/toolAnnotations")
                                         .build())
@@ -71,5 +83,69 @@ class McpSdkToolAnnotationsServerTest {
         assertThat(annotations2.destructiveHint(), is(false));
         assertThat(annotations2.idempotentHint(), is(true));
         assertThat(annotations2.openWorldHint(), is(false));
+    }
+
+    @Test
+    void testGeneratedTaskSupport() {
+        JsonObject initialize = JsonObject.builder()
+                .set("jsonrpc", "2.0")
+                .set("id", 1)
+                .set("method", "initialize")
+                .set("params", JsonObject.builder()
+                        .set("protocolVersion", "2025-11-25")
+                        .set("capabilities", JsonObject.empty())
+                        .set("clientInfo", JsonObject.builder()
+                                .set("name", "declarative-task-test")
+                                .set("version", "1.0.0")
+                                .build())
+                        .build())
+                .build();
+        String sessionId;
+        try (var response = httpClient.post("/toolAnnotations")
+                .header(HeaderValues.CONTENT_TYPE_JSON)
+                .submit(initialize.toString())) {
+            sessionId = response.headers().get(SESSION_ID_HEADER).get();
+            response.entity().as(String.class);
+        }
+
+        JsonObject list = JsonObject.builder()
+                .set("jsonrpc", "2.0")
+                .set("id", 2)
+                .set("method", "tools/list")
+                .set("params", JsonObject.empty())
+                .build();
+        try (var response = httpClient.post("/toolAnnotations")
+                .header(SESSION_ID_HEADER, sessionId)
+                .header(MCP_PROTOCOL_VERSION, "2025-11-25")
+                .header(HeaderValues.CONTENT_TYPE_JSON)
+                .submit(list.toString())) {
+            JsonObject result = JsonParser.create(response.entity().as(String.class))
+                    .readJsonObject()
+                    .objectValue("result")
+                    .orElseThrow();
+            JsonObject defaultTool = result.arrayValue("tools")
+                    .orElseThrow()
+                    .values()
+                    .stream()
+                    .map(value -> value.asObject())
+                    .filter(value -> value.stringValue("name").orElse("").equals("tool1"))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(defaultTool.containsKey("execution"), is(false));
+
+            JsonObject tool = result.arrayValue("tools")
+                    .orElseThrow()
+                    .values()
+                    .stream()
+                    .map(value -> value.asObject())
+                    .filter(value -> value.stringValue("name").orElse("").equals("tool2"))
+                    .findFirst()
+                    .orElseThrow();
+            assertThat(tool.objectValue("execution")
+                               .orElseThrow()
+                               .stringValue("taskSupport")
+                               .orElseThrow(),
+                       is("optional"));
+        }
     }
 }

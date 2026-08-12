@@ -17,8 +17,12 @@
 package io.helidon.extensions.mcp.server;
 
 import java.lang.System.Logger.Level;
+import java.util.Objects;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.Lock;
+import java.util.concurrent.locks.ReentrantLock;
 
-import io.helidon.common.LazyValue;
+import io.helidon.json.JsonNull;
 import io.helidon.json.JsonValue;
 
 /**
@@ -28,10 +32,16 @@ import io.helidon.json.JsonValue;
  * to wait for the completion of the operation.
  */
 public final class McpCancellation {
-    private static final System.Logger LOGGER = System.getLogger(McpServerFeature.class.getName());
-    private final Runnable noop = () -> {};
+    private static final int MAX_CONCURRENT_HOOKS = 1000;
+    private static final System.Logger LOGGER = System.getLogger(McpCancellation.class.getName());
+    private static final Semaphore HOOK_PERMITS = new Semaphore(MAX_CONCURRENT_HOOKS);
+
+    private final Lock lock = new ReentrantLock();
     private volatile McpCancellationResult result;
-    private LazyValue<Runnable> hook = LazyValue.create(() -> noop);
+    private Runnable hook = () -> {};
+    private JsonValue cancellationRequestId = JsonNull.instance();
+    private boolean hookRegistered;
+    private boolean hookInvoked;
 
     McpCancellation() {
         result = new McpCancellationResultImpl(false);
@@ -52,7 +62,24 @@ public final class McpCancellation {
      * @param hook cancellation hook
      */
     public void registerCancellationHook(Runnable hook) {
-        this.hook = LazyValue.create(() -> hook);
+        Objects.requireNonNull(hook, "hook must not be null");
+        Runnable hookToRun = null;
+        JsonValue requestId = JsonNull.instance();
+        lock.lock();
+        try {
+            this.hook = hook;
+            hookRegistered = true;
+            if (result.isRequested() && !hookInvoked) {
+                hookInvoked = true;
+                hookToRun = hook;
+                requestId = cancellationRequestId;
+            }
+        } finally {
+            lock.unlock();
+        }
+        if (hookToRun != null) {
+            runHook(hookToRun, requestId);
+        }
     }
 
     /**
@@ -77,12 +104,42 @@ public final class McpCancellation {
     }
 
     private void cancel(McpCancellationResult cancellationResult, JsonValue requestId) {
-        if (!hook.isLoaded()) {
-            if (LOGGER.isLoggable(Level.DEBUG)) {
-                LOGGER.log(Level.DEBUG, "Cancelling task with request id: %s", requestId);
+        Runnable hookToRun = null;
+        lock.lock();
+        try {
+            if (result.isRequested()) {
+                return;
             }
             result = cancellationResult;
-            hook.get().run();
+            cancellationRequestId = requestId;
+            if (hookRegistered) {
+                hookInvoked = true;
+                hookToRun = hook;
+            }
+        } finally {
+            lock.unlock();
         }
+        if (LOGGER.isLoggable(Level.DEBUG)) {
+            LOGGER.log(Level.DEBUG, "Cancelling task with request id: %s", requestId);
+        }
+        if (hookToRun != null) {
+            runHook(hookToRun, requestId);
+        }
+    }
+
+    private void runHook(Runnable hook, JsonValue requestId) {
+        if (!HOOK_PERMITS.tryAcquire()) {
+            LOGGER.log(Level.WARNING, "Cancellation hook capacity reached for request id: " + requestId);
+            return;
+        }
+        Thread.ofVirtual().name("mcp-cancellation-hook").start(() -> {
+            try {
+                hook.run();
+            } catch (RuntimeException e) {
+                LOGGER.log(Level.WARNING, "Cancellation hook failed for request id: " + requestId, e);
+            } finally {
+                HOOK_PERMITS.release();
+            }
+        });
     }
 }

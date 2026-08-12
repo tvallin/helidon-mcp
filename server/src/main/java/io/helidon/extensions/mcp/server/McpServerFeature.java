@@ -17,6 +17,7 @@
 package io.helidon.extensions.mcp.server;
 
 import java.lang.System.Logger.Level;
+import java.math.RoundingMode;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -30,12 +31,15 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 import io.helidon.builder.api.RuntimeType;
+import io.helidon.common.context.Context;
+import io.helidon.common.context.Contexts;
 import io.helidon.common.mapper.OptionalValue;
 import io.helidon.config.Config;
 import io.helidon.http.HeaderNames;
 import io.helidon.http.HeaderValues;
 import io.helidon.http.Status;
 import io.helidon.json.JsonNull;
+import io.helidon.json.JsonNumber;
 import io.helidon.json.JsonObject;
 import io.helidon.json.JsonString;
 import io.helidon.json.JsonValue;
@@ -66,6 +70,10 @@ import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_RESOURCE
 import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_RESOURCES_TEMPLATES_LIST;
 import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_RESOURCES_UNSUBSCRIBE;
 import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_SESSION_DISCONNECT;
+import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_TASKS_CANCEL;
+import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_TASKS_GET;
+import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_TASKS_LIST;
+import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_TASKS_RESULT;
 import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_TOOLS_CALL;
 import static io.helidon.extensions.mcp.server.McpJsonSerializer.METHOD_TOOLS_LIST;
 import static io.helidon.extensions.mcp.server.McpJsonSerializer.isResponse;
@@ -75,6 +83,7 @@ import static io.helidon.extensions.mcp.server.McpStreamableHttpTransportManager
 import static io.helidon.jsonrpc.core.JsonRpcError.INTERNAL_ERROR;
 import static io.helidon.jsonrpc.core.JsonRpcError.INVALID_PARAMS;
 import static io.helidon.jsonrpc.core.JsonRpcError.INVALID_REQUEST;
+import static io.helidon.jsonrpc.core.JsonRpcError.METHOD_NOT_FOUND;
 
 /**
  * Actual MCP server implemented as a Helidon {@link io.helidon.webserver.http.HttpFeature}.
@@ -85,8 +94,9 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     private static final System.Logger LOGGER = System.getLogger(McpServerFeature.class.getName());
 
     private final String endpoint;
-    private final McpSessions sessions;
     private final boolean stateless;
+    private final McpSessions sessions;
+    private final McpTasks taskManager;
     private final McpServerConfig config;
     private final JsonRpcHandlers jsonRpcHandlers;
     private final McpPagination<McpTool> tools;
@@ -97,7 +107,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     private final Map<String, McpCompletion> promptCompletions = new ConcurrentHashMap<>();
     private final Map<String, McpCompletion> resourceCompletions = new ConcurrentHashMap<>();
 
-    private McpServerFeature(McpServerConfig config) {
+    private McpServerFeature(McpServerConfig config, McpTasks taskManager) {
         List<McpTool> tools = new CopyOnWriteArrayList<>(config.tools());
         List<McpPrompt> prompts = new CopyOnWriteArrayList<>(config.prompts());
         List<McpResource> resources = new CopyOnWriteArrayList<>();
@@ -107,7 +117,11 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         this.config = config;
         this.stateless = config.stateless();
         this.endpoint = removeTrailingSlash(config.path());
-        this.sessions = new McpSessions(config.maxSessionCount());
+        this.taskManager = taskManager;
+        this.sessions = new McpSessions(config.maxSessionCount(), session -> {
+            session.close();
+            taskManager.remove(session);
+        });
         for (McpResource resource : config.resources()) {
             if (isTemplate(resource)) {
                 templates.add(new McpResourceTemplate(resource));
@@ -123,10 +137,10 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             }
         }
 
-        this.tools = new McpPagination<>(tools, config.toolsPageSize());
-        this.prompts = new McpPagination<>(prompts, config.promptsPageSize());
-        this.resources = new McpPagination<>(resources, config.resourcesPageSize());
-        this.resourceTemplates = new McpPagination<>(templates, config.resourceTemplatesPageSize());
+        this.tools = new McpStaticPagination<>(tools, config.toolsPageSize());
+        this.prompts = new McpStaticPagination<>(prompts, config.promptsPageSize());
+        this.resources = new McpStaticPagination<>(resources, config.resourcesPageSize());
+        this.resourceTemplates = new McpStaticPagination<>(templates, config.resourceTemplatesPageSize());
 
         builder.method(METHOD_PING, this::pingRpc);
         builder.method(METHOD_INITIALIZE, this::initializeRpc);
@@ -136,6 +150,11 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             builder.method(METHOD_TOOLS_LIST, this::toolsListRpc);
             builder.method(METHOD_TOOLS_CALL, this::toolsCallRpc);
         }
+
+        builder.method(METHOD_TASKS_GET, this::tasksGetRpc);
+        builder.method(METHOD_TASKS_RESULT, this::tasksResultRpc);
+        builder.method(METHOD_TASKS_CANCEL, this::tasksCancelRpc);
+        builder.method(METHOD_TASKS_LIST, this::tasksListRpc);
 
         if (!config.resources().isEmpty()) {
             capabilities.add(McpCapability.RESOURCE_LIST_CHANGED);
@@ -179,7 +198,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
      * @return the instance
      */
     public static McpServerFeature create(McpServerConfig config) {
-        return new McpServerFeature(config);
+        return new McpServerFeature(config, Services.get(McpTasks.class));
     }
 
     /**
@@ -258,7 +277,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         disconnectSession(request, response);
     }
 
-    private void disconnectSession(HttpRequest request, ServerResponse response) {
+    private void disconnectSession(ServerRequest request, ServerResponse response) {
         Optional<McpSession> foundSession = findSession(request);
         if (foundSession.isEmpty()) {
             response.status(Status.NOT_FOUND_404).send();
@@ -283,6 +302,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             String sessionId = UUID.randomUUID().toString();
             McpTransportManager manager = new McpSsePostTransportManager(endpoint, sessionId);
             McpSession session = new McpSession(sessions, manager, config, sessionId);
+            session.bindAuthorization(request.context());
             sessions.put(sessionId, session);
             session.onConnect(response);
         }
@@ -300,6 +320,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             String sessionId = UUID.randomUUID().toString();
             McpTransportManager transportManager = new McpStreamableHttpTransportManager(config, sessions, sessionId);
             session = new McpSession(sessions, transportManager, config, sessionId);
+            session.bindAuthorization(req.context());
             sessions.put(sessionId, session);
             session.onConnect(res);
         } else {
@@ -315,9 +336,9 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         session.state(INITIALIZING);
 
         var payload = session.serializer().createJsonInitializeResponse(capabilities, config);
-        session.createTransport(requestId, req, res);
+        McpTransport transport = session.createTransport(requestId, req, res);
         res.result(payload.build());
-        session.send(requestId, res);
+        session.send(requestId, res, transport);
     }
 
     private void notificationInitRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -350,9 +371,11 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         }
         JsonValue cancellationRequestId = requestId.get();
         if (reason.isEmpty()) {
-            session.findFeatures(cancellationRequestId)
-                    .map(McpFeatures::cancellation)
-                    .ifPresent(cancellation -> cancellation.cancel(cancellationRequestId));
+            if (!session.abandonTaskResult(cancellationRequestId, req.context())) {
+                session.findFeatures(cancellationRequestId)
+                        .map(McpFeatures::cancellation)
+                        .ifPresent(cancellation -> cancellation.cancel(cancellationRequestId));
+            }
             res.status(Status.ACCEPTED_202);
             return;
         }
@@ -366,9 +389,11 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         }
 
         String cancelReason = jsonReason.value();
-        session.findFeatures(cancellationRequestId)
-                .map(McpFeatures::cancellation)
-                .ifPresent(cancellation -> cancellation.cancel(cancelReason, cancellationRequestId));
+        if (!session.abandonTaskResult(cancellationRequestId, req.context())) {
+            session.findFeatures(cancellationRequestId)
+                    .map(McpFeatures::cancellation)
+                    .ifPresent(cancellation -> cancellation.cancel(cancelReason, cancellationRequestId));
+        }
         res.status(Status.ACCEPTED_202);
     }
 
@@ -413,13 +438,14 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     private void toolsCallRpc(JsonRpcRequest req, JsonRpcResponse res) {
         JsonValue requestId = req.rpcId()
                 .orElseThrow(() -> new McpInternalException("request id is required"));
-        Optional<McpSession> foundSession = findSessionOnRequest(requestId, req, res);
+        Optional<SessionRequest> foundRequest = findSessionRequest(requestId, req, res);
         if (!res.status().equals(Status.OK_200)) {
             res.send();
             return;
         }
-        boolean error = false;
-        McpSession session = foundSession.orElseThrow(() -> new McpInternalException("Session not found"));
+        SessionRequest sessionRequest = foundRequest.orElseThrow(() -> new McpInternalException("Session not found"));
+        McpSession session = sessionRequest.session();
+        McpTransport transport = sessionRequest.transport();
         McpParameters parameters = new McpParameters(req.params());
 
         String name = parameters.get("name").asString().orElse("");
@@ -429,11 +455,32 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
 
         if (tool.isEmpty()) {
             res.error(INVALID_PARAMS, "Tool with name %s is not available".formatted(name));
-            session.send(requestId, res);
+            session.send(requestId, res, transport);
             return;
         }
 
-        McpFeatures features = session.createFeatures(requestId, req, res);
+        McpTool selectedTool = tool.get();
+        boolean tasksEnabled = taskRequestsEnabled(session);
+        boolean taskRequested = tasksEnabled && req.params().find("task").isPresent();
+        if (tasksEnabled && taskRequested && selectedTool.taskSupport() == McpTaskSupport.FORBIDDEN) {
+            res.error(METHOD_NOT_FOUND, "Tool %s does not support task-augmented execution".formatted(name));
+            session.send(requestId, res, transport);
+            return;
+        }
+        if (tasksEnabled && !taskRequested && selectedTool.taskSupport() == McpTaskSupport.REQUIRED) {
+            res.error(METHOD_NOT_FOUND, "Tool %s requires task-augmented execution".formatted(name));
+            session.send(requestId, res, transport);
+            return;
+        }
+        if (taskRequested) {
+            if (!taskRequestSupported(sessionRequest, requestId, res)) {
+                return;
+            }
+            toolsCallTaskRpc(requestId, req, res, sessionRequest, parameters, selectedTool);
+            return;
+        }
+
+        McpFeatures features = session.createFeatures(requestId, transport, req.context());
         session.beforeFeatureRequest(parameters, requestId);
         McpRequest request = McpRequest.builder()
                 .parameters(parameters)
@@ -443,12 +490,272 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                 .sessionContext(session.context())
                 .requestContext(req.context())
                 .build();
-        McpToolResult result = tool.get().tool(new McpToolRequestImpl(request));
+        McpToolResult result = selectedTool.tool(new McpToolRequestImpl(request));
         session.afterFeatureRequest(parameters, requestId);
 
-        var toolCall = session.serializer().toolCall(tool.get(), result);
+        var toolCall = session.serializer().toolCall(selectedTool, result);
         res.result(toolCall);
-        session.send(requestId, res);
+        session.send(requestId, res, transport);
+    }
+
+    private void toolsCallTaskRpc(JsonValue requestId,
+                                  JsonRpcRequest req,
+                                  JsonRpcResponse res,
+                                  SessionRequest sessionRequest,
+                                  McpParameters parameters,
+                                  McpTool tool) {
+        McpSession session = sessionRequest.session();
+        JsonValue taskValue = req.params().find("task")
+                .orElseThrow(() -> new McpInternalException(INVALID_PARAMS, "Task metadata is required"));
+        if (!(taskValue instanceof JsonObject taskParameters)) {
+            throw new McpInternalException(INVALID_PARAMS, "Task metadata must be an object");
+        }
+
+        Optional<JsonValue> ttlParameter = taskParameters.value("ttl");
+        McpTask task;
+        if (ttlParameter.isEmpty()) {
+            task = session.createTask(taskManager, req.context());
+        } else {
+            JsonValue ttlValue = ttlParameter.get();
+            if (ttlValue instanceof JsonNull) {
+                throw new McpInternalException(INVALID_PARAMS, "Task TTL must be a number");
+            }
+            if (!(ttlValue instanceof JsonNumber ttlNumber)) {
+                throw new McpInternalException(INVALID_PARAMS, "Task TTL must be a number");
+            }
+            var requestedTtl = ttlNumber.bigDecimalValue();
+            if (requestedTtl.signum() < 0) {
+                throw new McpInternalException(INVALID_PARAMS, "Task TTL must not be negative");
+            }
+            long ttl;
+            try {
+                ttl = requestedTtl
+                        .setScale(0, RoundingMode.CEILING)
+                        .longValueExact();
+            } catch (ArithmeticException e) {
+                ttl = Long.MAX_VALUE;
+            }
+            task = session.createTask(taskManager, req.context(), ttl);
+        }
+
+        startTask(requestId, req, res, sessionRequest, parameters, tool, task);
+    }
+
+    private void startTask(JsonValue requestId,
+                           JsonRpcRequest req,
+                           JsonRpcResponse res,
+                           SessionRequest sessionRequest,
+                           McpParameters parameters,
+                           McpTool tool,
+                           McpTask task) {
+        McpSession session = sessionRequest.session();
+        Context requestContext = req.context();
+        McpFeatures features = session.createFeatures(task.transport(), requestContext);
+        McpRequest request = McpRequest.builder()
+                .parameters(parameters)
+                .meta(parameters.get("_meta"))
+                .features(features)
+                .protocolVersion(session.protocolVersion().text())
+                .sessionContext(session.context())
+                .requestContext(requestContext)
+                .build();
+        McpToolRequest toolRequest = new McpToolRequestImpl(request);
+        JsonObject createTaskResult = task.relatedResult(JsonObject.builder().set("task", task.toJson()).build());
+        Runnable execution = () -> executeTask(session, parameters, tool, toolRequest, features, task);
+        Runnable contextAwareExecution = Contexts.context()
+                .<Runnable>map(context -> () -> Contexts.runInContext(context, execution))
+                .orElse(execution);
+        Thread executionThread = Thread.ofVirtual()
+                .name("mcp-task-" + task.id())
+                .unstarted(contextAwareExecution);
+        taskManager.start(task, executionThread, features);
+
+        res.result(createTaskResult);
+        session.send(requestId, res, sessionRequest.transport());
+    }
+
+    private void executeTask(McpSession session,
+                             McpParameters parameters,
+                             McpTool tool,
+                             McpToolRequest request,
+                             McpFeatures features,
+                             McpTask task) {
+        try {
+            session.beforeFeatureRequest(parameters, features);
+            McpToolResult result = tool.tool(request);
+            session.afterFeatureRequest(parameters, features);
+            JsonObject toolCall = session.serializer().toolCall(tool, result);
+            task.complete(toolCall, result.error());
+        } catch (Throwable throwable) {
+            String message = errorMessage(throwable);
+            if (throwable instanceof McpException exception) {
+                task.fail(exception.code(), message);
+            } else if (throwable instanceof McpInternalException exception) {
+                task.fail(exception.code(), message);
+            } else {
+                task.fail(INTERNAL_ERROR, message);
+            }
+        } finally {
+            taskManager.executionFinished(task);
+        }
+    }
+
+    private void tasksGetRpc(JsonRpcRequest req, JsonRpcResponse res) {
+        JsonValue requestId = req.rpcId()
+                .orElseThrow(() -> new McpInternalException("request id is required"));
+        Optional<SessionRequest> foundRequest = findSessionRequest(requestId, req, res);
+        if (!res.status().equals(Status.OK_200)) {
+            res.send();
+            return;
+        }
+        SessionRequest sessionRequest = foundRequest.orElseThrow(() -> new McpInternalException("Session not found"));
+        McpSession session = sessionRequest.session();
+        if (!taskRequestSupported(sessionRequest, requestId, res)) {
+            return;
+        }
+        String taskId = taskId(new McpParameters(req.params()));
+        res.result(taskManager.get(taskId, session, req.context()).toJson());
+        session.send(requestId, res, sessionRequest.transport());
+    }
+
+    private void tasksResultRpc(JsonRpcRequest req, JsonRpcResponse res) {
+        JsonValue requestId = req.rpcId()
+                .orElseThrow(() -> new McpInternalException("request id is required"));
+        Optional<SessionRequest> foundRequest = findSessionRequest(requestId, req, res);
+        if (!res.status().equals(Status.OK_200)) {
+            res.send();
+            return;
+        }
+        SessionRequest sessionRequest = foundRequest.orElseThrow(() -> new McpInternalException("Session not found"));
+        McpSession session = sessionRequest.session();
+        if (!taskRequestSupported(sessionRequest, requestId, res)) {
+            return;
+        }
+        String taskId = taskId(new McpParameters(req.params()));
+        McpTask task = taskManager.get(taskId, session, req.context());
+        McpTransport transport = sessionRequest.transport();
+        McpTaskResultWaiters.Waiter waiter = session.registerTaskResult(requestId, task, transport);
+        boolean delivered = false;
+        try {
+            if (!session.attachTaskResult(waiter)) {
+                return;
+            }
+            McpTask.Outcome outcome;
+            try {
+                outcome = task.awaitOutcome(waiter);
+            } catch (McpInternalException e) {
+                if (waiter.abandoned()) {
+                    return;
+                }
+                throw e;
+            }
+            if (!session.claimTaskResult(waiter)) {
+                return;
+            }
+            if (outcome instanceof McpTask.ResultOutcome result) {
+                res.result(task.relatedResult(result.result()));
+            } else if (outcome instanceof McpTask.ErrorOutcome error) {
+                res.error(error.code(), error.message());
+            } else {
+                throw new McpInternalException("Unknown task outcome");
+            }
+            session.send(requestId, res, transport);
+            delivered = true;
+        } finally {
+            session.discardTaskResult(waiter);
+            if (!delivered) {
+                session.clearRequest(requestId);
+            }
+            if (delivered) {
+                task.transport().close();
+            }
+        }
+    }
+
+    private void tasksListRpc(JsonRpcRequest req, JsonRpcResponse res) {
+        JsonValue requestId = req.rpcId()
+                .orElseThrow(() -> new McpInternalException("request id is required"));
+        Optional<SessionRequest> foundRequest = findSessionRequest(requestId, req, res);
+        if (!res.status().equals(Status.OK_200)) {
+            res.send();
+            return;
+        }
+        SessionRequest sessionRequest = foundRequest.orElseThrow(() -> new McpInternalException("Session not found"));
+        McpSession session = sessionRequest.session();
+        if (!taskRequestSupported(sessionRequest, requestId, res)) {
+            return;
+        }
+
+        Optional<JsonValue> cursor = req.params().find("cursor");
+        McpPage<McpTask> page;
+        if (cursor.isEmpty()) {
+            page = taskManager.list(session, req.context());
+        } else {
+            JsonValue cursorValue = cursor.get();
+            if (!(cursorValue instanceof JsonString cursorString)) {
+                throw new McpInternalException(INVALID_PARAMS, "Task cursor must be a string");
+            }
+            page = taskManager.list(session, req.context(), cursorString.value());
+        }
+        List<JsonValue> taskValues = page.components().stream()
+                .map(McpTask::toJson)
+                .map(JsonValue.class::cast)
+                .toList();
+        JsonObject.Builder result = JsonObject.builder().setValues("tasks", taskValues);
+        if (!page.cursor().isBlank()) {
+            result.set("nextCursor", page.cursor());
+        }
+        res.result(result.build());
+        session.send(requestId, res, sessionRequest.transport());
+    }
+
+    private void tasksCancelRpc(JsonRpcRequest req, JsonRpcResponse res) {
+        JsonValue requestId = req.rpcId()
+                .orElseThrow(() -> new McpInternalException("request id is required"));
+        Optional<SessionRequest> foundRequest = findSessionRequest(requestId, req, res);
+        if (!res.status().equals(Status.OK_200)) {
+            res.send();
+            return;
+        }
+        SessionRequest sessionRequest = foundRequest.orElseThrow(() -> new McpInternalException("Session not found"));
+        McpSession session = sessionRequest.session();
+        if (!taskRequestSupported(sessionRequest, requestId, res)) {
+            return;
+        }
+        String taskId = taskId(new McpParameters(req.params()));
+        res.result(taskManager.cancel(taskId, session, req.context()).toJson());
+        session.send(requestId, res, sessionRequest.transport());
+    }
+
+    private boolean taskRequestSupported(SessionRequest request, JsonValue requestId, JsonRpcResponse response) {
+        McpSession session = request.session();
+        if (!taskRequestsEnabled(session)) {
+            response.error(METHOD_NOT_FOUND, "Tasks are not supported for the negotiated protocol version");
+            session.send(requestId, response, request.transport());
+            return false;
+        }
+        if (stateless && sessions.get(session.id()).isEmpty()) {
+            response.error(INVALID_REQUEST, "Task operations require an initialized session");
+            session.send(requestId, response, request.transport());
+            return false;
+        }
+        return true;
+    }
+
+    private boolean taskRequestsEnabled(McpSession session) {
+        return session.protocolVersion() == McpProtocolVersion.VERSION_2025_11_25;
+    }
+
+    private String taskId(McpParameters parameters) {
+        McpParameters taskId = parameters.get("taskId");
+        if (!taskId.isString()) {
+            throw new McpInternalException(INVALID_PARAMS, "Task ID must be a string");
+        }
+        String value = taskId.asString().get();
+        if (value.isBlank()) {
+            throw new McpInternalException(INVALID_PARAMS, "Task ID must not be blank");
+        }
+        return value;
     }
 
     private void resourcesListRpc(JsonRpcRequest req, JsonRpcResponse res) {
@@ -776,7 +1083,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                 if (LOGGER.isLoggable(Level.DEBUG)) {
                     LOGGER.log(Level.DEBUG, "Client response:\n" + prettyPrint(object));
                 }
-                session.get().acceptResponse(object);
+                session.get().acceptResponse(object, req.context());
                 return Optional.empty();
             }
         }
@@ -818,27 +1125,32 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             LOGGER.log(Level.DEBUG, "Send error response because of: ", throwable);
         }
 
-        // Look up session to send an error to the client
+        Optional<SessionRequest> capturedRequest = request.context().get(SessionRequest.class);
+        Optional<McpSession> session = capturedRequest.map(SessionRequest::session)
+                .or(() -> findSession(request));
         JsonValue requestId = request.rpcId()
                 .orElse(JsonNull.instance());
-        var session = findSession(request);
+        String message = errorMessage(throwable);
         if (session.isEmpty()) {
             response.header(HeaderValues.CONTENT_TYPE_JSON);
             if (stateless) {
-                return Optional.of(JsonRpcError.create(errorCode, throwable.getMessage()));
+                return Optional.of(JsonRpcError.create(errorCode, message));
             }
             return Optional.of(JsonRpcError.create(INTERNAL_ERROR, "Internal server error"));
         }
-        response.error(errorCode, throwable.getMessage());
+        response.error(errorCode, message);
 
         // If streamable HTTP transport and did not switch to SSE
         // the handler manages the response
-        var transport = session.get()
-                .transport(requestId)
+        Optional<McpTransport> requestTransport = capturedRequest
+                .filter(captured -> captured.session() == session.get())
+                .map(SessionRequest::transport)
+                .or(() -> session.get().transport(requestId));
+        var streamableTransport = requestTransport
                 .filter(it -> it instanceof McpStreamableHttpTransport)
                 .map(McpStreamableHttpTransport.class::cast)
                 .filter(it -> !it.openedSseChannel());
-        if (transport.isPresent()) {
+        if (streamableTransport.isPresent()) {
             if (LOGGER.isLoggable(Level.DEBUG)) {
                 LOGGER.log(Level.DEBUG, "Streamable HTTP:\n" + prettyPrint(response.asJsonObject()));
             }
@@ -846,8 +1158,17 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
             response.header(HeaderValues.CONTENT_TYPE_JSON);
             return response.error();
         }
-        session.get().send(requestId, response);
+        if (requestTransport.isPresent()) {
+            session.get().send(requestId, response, requestTransport.get());
+        } else {
+            session.get().send(requestId, response);
+        }
         return Optional.empty();
+    }
+
+    private static String errorMessage(Throwable throwable) {
+        String message = throwable.getMessage();
+        return message == null ? throwable.getClass().getSimpleName() : message;
     }
 
     /**
@@ -871,8 +1192,25 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
         }
     }
 
+    private Optional<McpSession> findSession(ServerRequest request) {
+        return findSession((HttpRequest) request)
+                .filter(session -> session.authorized(request.context()));
+    }
+
     private Optional<McpSession> findSessionOnRequest(JsonValue id, JsonRpcRequest request, JsonRpcResponse response) {
-        return findSession(request, response, Status.NOT_FOUND_404).map(session -> session.onRequest(id, request, response));
+        return findSessionRequest(id, request, response).map(SessionRequest::session);
+    }
+
+    private Optional<SessionRequest> findSessionRequest(JsonValue id,
+                                                        JsonRpcRequest request,
+                                                        JsonRpcResponse response) {
+        return findSession(request, response, Status.NOT_FOUND_404)
+                .map(session -> {
+                    SessionRequest sessionRequest = new SessionRequest(session,
+                                                                       session.onRequest(id, request, response));
+                    request.context().register(sessionRequest);
+                    return sessionRequest;
+                });
     }
 
     private Optional<McpSession> findSessionOnNotification(JsonRpcRequest request, JsonRpcResponse response) {
@@ -886,6 +1224,7 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
                 String sessionId = UUID.randomUUID().toString();
                 McpTransportManager transportManager = new McpStreamableHttpTransportManager(config, sessions, sessionId);
                 McpSession statelessSession = new McpSession(sessions, transportManager, config, sessionId);
+                statelessSession.bindAuthorization(req.context());
                 statelessSession.protocolVersion(McpProtocolVersion.lastest());
                 return Optional.of(statelessSession);
             }
@@ -902,5 +1241,8 @@ public final class McpServerFeature implements HttpFeature, RuntimeType.Api<McpS
     private boolean isTemplate(McpResource resource) {
         String uri = resource.uri();
         return uri.contains("{") || uri.contains("}");
+    }
+
+    private record SessionRequest(McpSession session, McpTransport transport) {
     }
 }

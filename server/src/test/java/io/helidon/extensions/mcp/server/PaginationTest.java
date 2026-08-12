@@ -25,13 +25,14 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.contains;
 import static org.hamcrest.Matchers.hasItems;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 
 class PaginationTest {
 
     @Test
     void testPaginationOrder() {
         List<String> strings = List.of("a", "b", "c", "d");
-        McpPagination<String> pagination = new McpPagination<>(strings, 2);
+        McpPagination<String> pagination = new McpStaticPagination<>(strings, 2);
         assertThat(pagination.content(), hasItems("a", "b", "c", "d"));
 
         McpPage<String> page1 = pagination.firstPage();
@@ -47,7 +48,7 @@ class PaginationTest {
     @Test
     void testPaginationMatchingSize() {
         List<String> strings = List.of("a", "b", "c", "d");
-        McpPagination<String> pagination = new McpPagination<>(strings, 4);
+        McpPagination<String> pagination = new McpStaticPagination<>(strings, 4);
         assertThat(pagination.content(), hasItems("a", "b", "c", "d"));
 
         McpPage<String> page = pagination.firstPage();
@@ -59,7 +60,7 @@ class PaginationTest {
     @Test
     void testPaginationOversize() {
         List<String> strings = List.of("a", "b", "c", "d");
-        McpPagination<String> pagination = new McpPagination<>(strings, 10);
+        McpPagination<String> pagination = new McpStaticPagination<>(strings, 10);
         assertThat(pagination.content(), hasItems("a", "b", "c", "d"));
 
         McpPage<String> page = pagination.firstPage();
@@ -71,7 +72,7 @@ class PaginationTest {
     @Test
     void testPaginationSize() {
         List<String> strings = List.of("a", "b", "c", "d");
-        McpPagination<String> pagination = new McpPagination<>(strings, 3);
+        McpPagination<String> pagination = new McpStaticPagination<>(strings, 3);
         assertThat(pagination.content(), hasItems("a", "b", "c", "d"));
 
         McpPage<String> page1 = pagination.firstPage();
@@ -87,7 +88,7 @@ class PaginationTest {
     @Test
     void testPaginationWithUniqueItem() {
         List<String> strings = List.of("a", "b", "c", "d");
-        McpPagination<String> pagination = new McpPagination<>(strings, 1);
+        McpPagination<String> pagination = new McpStaticPagination<>(strings, 1);
         assertThat(pagination.content(), hasItems("a", "b", "c", "d"));
 
         McpPage<String> page1 = pagination.firstPage();
@@ -114,7 +115,7 @@ class PaginationTest {
     @Test
     void testPaginationDefaultSize() {
         List<String> strings = List.of("a", "b", "c", "d");
-        McpPagination<String> pagination = new McpPagination<>(strings, DEFAULT_PAGE_SIZE);
+        McpPagination<String> pagination = new McpStaticPagination<>(strings, DEFAULT_PAGE_SIZE);
         assertThat(pagination.content(), hasItems("a", "b", "c", "d"));
 
         McpPage<String> page = pagination.firstPage();
@@ -125,12 +126,35 @@ class PaginationTest {
 
     @Test
     void testPaginationEmptyContent() {
-        McpPagination<String> pagination = new McpPagination<>(List.of(), 2);
+        McpPagination<String> pagination = new McpStaticPagination<>(List.of(), 2);
         assertThat(pagination.content(), is(List.of()));
 
         McpPage<String> page = pagination.firstPage();
         assertThat(page.isLast(), is(true));
         assertThat(page.cursor().isBlank(), is(true));
         assertThat(page.components(), is(List.of()));
+    }
+
+    @Test
+    void testTaskPaginationAcrossSnapshots() {
+        McpTask a = new McpTask("a", new McpTaskOwner("owner"), 1000, 1000);
+        McpTask b = new McpTask("b", new McpTaskOwner("owner"), 1000, 1000);
+        McpTask c = new McpTask("c", new McpTaskOwner("owner"), 1000, 1000);
+        McpPagination<McpTask> initial = new McpMutablePagination(List.of(a, b, c), 2);
+
+        McpPage<McpTask> first = initial.firstPage();
+
+        assertThat(first.components(), contains(a, b));
+        assertThat(first.cursor(), is("b"));
+
+        McpTask aa = new McpTask("aa", new McpTaskOwner("owner"), 1000, 1000);
+        McpTask d = new McpTask("d", new McpTaskOwner("owner"), 1000, 1000);
+        McpPagination<McpTask> changed = new McpMutablePagination(List.of(aa, b, c, d), 2);
+        McpPage<McpTask> second = changed.page(first.cursor());
+
+        assertThat(second.components(), contains(c, d));
+        assertThat(second.isLast(), is(true));
+        assertThat(second.cursor(), is(""));
+        assertThat(changed.page("missing"), is(nullValue()));
     }
 }

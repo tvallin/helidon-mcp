@@ -15,10 +15,15 @@
  */
 package io.helidon.extensions.mcp.server;
 
+import java.security.Principal;
 import java.time.Duration;
+import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import io.helidon.common.context.Context;
+import io.helidon.common.security.SecurityContext;
 import io.helidon.json.JsonObject;
 import io.helidon.json.JsonParser;
 import io.helidon.json.JsonValue;
@@ -36,10 +41,12 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.hamcrest.Matchers.instanceOf;
 import static org.hamcrest.Matchers.is;
+import static org.hamcrest.Matchers.nullValue;
 import static org.hamcrest.Matchers.sameInstance;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class McpSessionTest {
@@ -180,8 +187,8 @@ class McpSessionTest {
                 .build();
 
         session.prepareResponse(42);
-        session.acceptResponse(malformedResponse);
-        session.acceptResponse(expectedResponse);
+        session.acceptResponse(malformedResponse, Context.create());
+        session.acceptResponse(expectedResponse, Context.create());
 
         JsonObject response = pollResponse(session, 42, Duration.ofSeconds(1));
         assertThat(response, is(expectedResponse));
@@ -200,8 +207,8 @@ class McpSessionTest {
         JsonObject firstResponse = JsonObject.builder().set("id", firstId).build();
         JsonObject secondResponse = JsonObject.builder().set("id", secondId).build();
 
-        session.acceptResponse(secondResponse);
-        session.acceptResponse(firstResponse);
+        session.acceptResponse(secondResponse, Context.create());
+        session.acceptResponse(firstResponse, Context.create());
 
         assertThat(pollResponse(session, firstId, Duration.ofSeconds(1)), sameInstance(firstResponse));
         assertThat(pollResponse(session, secondId, Duration.ofSeconds(1)), sameInstance(secondResponse));
@@ -226,12 +233,12 @@ class McpSessionTest {
         JsonObject firstResponse = JsonObject.builder().set("id", firstId).build();
         JsonObject secondResponse = JsonObject.builder().set("id", secondId).build();
         JsonObject thirdResponse = JsonObject.builder().set("id", thirdId).build();
-        session.acceptResponse(secondResponse);
-        session.acceptResponse(firstResponse);
+        session.acceptResponse(secondResponse, Context.create());
+        session.acceptResponse(firstResponse, Context.create());
         assertThat(pollResponse(session, firstId, Duration.ofSeconds(1)), sameInstance(firstResponse));
 
         session.prepareResponse(thirdId);
-        session.acceptResponse(thirdResponse);
+        session.acceptResponse(thirdResponse, Context.create());
 
         assertThat(pollResponse(session, secondId, Duration.ofSeconds(1)), sameInstance(secondResponse));
         assertThat(pollResponse(session, thirdId, Duration.ofSeconds(1)), sameInstance(thirdResponse));
@@ -269,7 +276,7 @@ class McpSessionTest {
     void ignoresResponseWithoutPendingRequest() {
         McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, "{}");
         JsonObject unsolicited = JsonObject.builder().set("id", 0).build();
-        session.acceptResponse(unsolicited);
+        session.acceptResponse(unsolicited, Context.create());
         long requestId = session.jsonRpcId();
         session.prepareResponse(requestId);
 
@@ -302,6 +309,265 @@ class McpSessionTest {
         assertThat(session.findFeatures(requestId).isEmpty(), is(true));
     }
 
+    @Test
+    void sendsTaskResultThroughCapturedTransportAfterCacheEviction() {
+        McpServerConfig config = McpServerFeature.builder()
+                .maxRequestsPerSession(1)
+                .buildPrototype();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "test-session");
+        JsonRpcRequest firstRequest = mock(JsonRpcRequest.class);
+        JsonRpcRequest secondRequest = mock(JsonRpcRequest.class);
+        JsonRpcResponse firstResponse = mock(JsonRpcResponse.class);
+        JsonRpcResponse secondResponse = mock(JsonRpcResponse.class);
+        McpTransport firstTransport = mock(McpStreamableHttpTransport.class);
+        McpTransport secondTransport = mock(McpStreamableHttpTransport.class);
+        JsonValue firstId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        JsonValue secondId = JsonObject.builder().set("id", 2).build().value("id").orElseThrow();
+        when(manager.create(firstRequest, firstResponse)).thenReturn(firstTransport);
+        when(manager.create(secondRequest, secondResponse)).thenReturn(secondTransport);
+        session.createTransport(firstId, firstRequest, firstResponse);
+        session.createTransport(secondId, secondRequest, secondResponse);
+
+        session.send(firstId, firstResponse, firstTransport);
+
+        verify(firstTransport).send(firstResponse);
+    }
+
+    @Test
+    void createsFeaturesWithCapturedTransportAfterCacheEviction() {
+        McpServerConfig config = McpServerFeature.builder()
+                .maxRequestsPerSession(1)
+                .buildPrototype();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "test-session");
+        JsonRpcRequest firstRequest = mock(JsonRpcRequest.class);
+        JsonRpcRequest secondRequest = mock(JsonRpcRequest.class);
+        JsonRpcResponse firstResponse = mock(JsonRpcResponse.class);
+        JsonRpcResponse secondResponse = mock(JsonRpcResponse.class);
+        McpTransport firstTransport = mock(McpStreamableHttpTransport.class);
+        McpTransport secondTransport = mock(McpStreamableHttpTransport.class);
+        Context firstContext = Context.create();
+        JsonValue firstId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        JsonValue secondId = JsonObject.builder().set("id", 2).build().value("id").orElseThrow();
+        when(manager.create(firstRequest, firstResponse)).thenReturn(firstTransport);
+        when(manager.create(secondRequest, secondResponse)).thenReturn(secondTransport);
+        session.createTransport(firstId, firstRequest, firstResponse);
+        session.createTransport(secondId, secondRequest, secondResponse);
+
+        McpFeatures features = session.createFeatures(firstId, firstTransport, firstContext);
+
+        assertThat(features.requestContext(), sameInstance(firstContext));
+        assertThat(session.findFeatures(firstId).orElseThrow(), sameInstance(features));
+    }
+
+    @Test
+    void closedSessionRejectsTaskCreationAndClosesManagerOnce() {
+        McpServerConfig config = McpServerConfig.create();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "closed-session");
+        session.close();
+        session.close();
+
+        assertThrows(McpInternalException.class,
+                     () -> session.createTask(new McpTasks(), Context.create()));
+        verify(manager).close();
+    }
+
+    @Test
+    void createsTransportForSameRequestOnlyOnce() throws InterruptedException {
+        McpServerConfig config = McpServerConfig.create();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "test-session");
+        JsonRpcRequest request = mock(JsonRpcRequest.class);
+        JsonRpcResponse response = mock(JsonRpcResponse.class);
+        McpTransport expected = mock(McpStreamableHttpTransport.class);
+        JsonValue requestId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        CountDownLatch createEntered = new CountDownLatch(1);
+        CountDownLatch releaseCreate = new CountDownLatch(1);
+        AtomicReference<McpTransport> firstResult = new AtomicReference<>();
+        AtomicReference<McpTransport> secondResult = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        when(manager.create(request, response)).thenAnswer(invocation -> {
+            createEntered.countDown();
+            if (!releaseCreate.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting to release transport creation");
+            }
+            return expected;
+        });
+
+        Thread first = Thread.ofVirtual().start(() -> {
+            try {
+                firstResult.set(session.createTransport(requestId, request, response));
+            } catch (Throwable e) {
+                failure.compareAndSet(null, e);
+            }
+        });
+        assertThat(createEntered.await(5, TimeUnit.SECONDS), is(true));
+        Thread second = Thread.ofVirtual().start(() -> {
+            try {
+                secondResult.set(session.createTransport(requestId, request, response));
+            } catch (Throwable e) {
+                failure.compareAndSet(null, e);
+            }
+        });
+        awaitWaiting(second);
+
+        releaseCreate.countDown();
+        join(first);
+        join(second);
+
+        assertThat(failure.get(), nullValue());
+        assertThat(firstResult.get(), sameInstance(expected));
+        assertThat(secondResult.get(), sameInstance(expected));
+        verify(manager).create(request, response);
+    }
+
+    @Test
+    void closeWaitsForAdmittedTransportCreationAndRejectsNewOperations() throws InterruptedException {
+        McpServerConfig config = McpServerConfig.create();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "test-session");
+        JsonRpcRequest request = mock(JsonRpcRequest.class);
+        JsonRpcResponse response = mock(JsonRpcResponse.class);
+        McpTransport expected = mock(McpStreamableHttpTransport.class);
+        JsonValue requestId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        CountDownLatch createEntered = new CountDownLatch(1);
+        CountDownLatch releaseCreate = new CountDownLatch(1);
+        AtomicReference<McpTransport> result = new AtomicReference<>();
+        AtomicReference<Throwable> failure = new AtomicReference<>();
+        when(manager.create(request, response)).thenAnswer(invocation -> {
+            createEntered.countDown();
+            if (!releaseCreate.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting to release transport creation");
+            }
+            return expected;
+        });
+
+        Thread creator = Thread.ofVirtual().start(() -> {
+            try {
+                result.set(session.createTransport(requestId, request, response));
+            } catch (Throwable e) {
+                failure.compareAndSet(null, e);
+            }
+        });
+        assertThat(createEntered.await(5, TimeUnit.SECONDS), is(true));
+        Thread closer = Thread.ofVirtual().start(session::close);
+        awaitWaiting(closer);
+
+        assertThrows(McpInternalException.class,
+                     () -> session.createTask(new McpTasks(), Context.create()));
+        releaseCreate.countDown();
+        join(creator);
+        join(closer);
+
+        assertThat(failure.get(), nullValue());
+        assertThat(result.get(), sameInstance(expected));
+        verify(manager).close();
+    }
+
+    @Test
+    void defersReentrantCloseUntilTransportCreationFinishes() {
+        McpServerConfig config = McpServerConfig.create();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "test-session");
+        JsonRpcRequest request = mock(JsonRpcRequest.class);
+        JsonRpcResponse response = mock(JsonRpcResponse.class);
+        McpTransport expected = mock(McpStreamableHttpTransport.class);
+        JsonValue requestId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        when(manager.create(request, response)).thenAnswer(invocation -> {
+            session.close();
+            return expected;
+        });
+
+        McpTransport result = session.createTransport(requestId, request, response);
+
+        assertThat(result, sameInstance(expected));
+        assertThrows(McpInternalException.class,
+                     () -> session.createTask(new McpTasks(), Context.create()));
+        verify(manager).close();
+    }
+
+    @Test
+    void taskResponseRequiresMatchingAuthorizationIdentity() {
+        McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, "{}");
+        Context alice = requestContext("alice", true, true);
+        McpTask task = new McpTasks().create(session, alice);
+        JsonObject bobResponse = JsonObject.builder().set("id", 7).set("result", "bob").build();
+        JsonObject changedAuthorizationResponse = JsonObject.builder()
+                .set("id", 7)
+                .set("result", "changed-authorization-alice")
+                .build();
+        JsonObject aliceResponse = JsonObject.builder().set("id", 7).set("result", "alice").build();
+        session.prepareResponse(7, task.transport());
+
+        session.acceptResponse(bobResponse, requestContext("bob", true, true));
+        session.acceptResponse(changedAuthorizationResponse, requestContext("alice", false, false));
+        session.acceptResponse(aliceResponse, requestContext("alice", true, true));
+
+        assertThat(pollResponse(session, 7, Duration.ofSeconds(1)), is(changedAuthorizationResponse));
+    }
+
+    @Test
+    void correlatesOwnedAndUnownedResponsesIndependently() {
+        McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, "{}");
+        Context alice = requestContext("alice", true, true);
+        McpTask task = new McpTasks().create(session, alice);
+        JsonObject ordinaryResponse = JsonObject.builder().set("id", 1).set("result", "ordinary").build();
+        JsonObject poisonedTaskResponse = JsonObject.builder().set("id", 2).set("result", "bob").build();
+        JsonObject taskResponse = JsonObject.builder().set("id", 2).set("result", "alice").build();
+        session.prepareResponse(1);
+        session.prepareResponse(2, task.transport());
+
+        session.acceptResponse(poisonedTaskResponse, requestContext("bob", true, true));
+        session.acceptResponse(ordinaryResponse, requestContext("bob", true, true));
+        session.acceptResponse(taskResponse, alice);
+
+        assertThat(pollResponse(session, 2, Duration.ofSeconds(1)), is(taskResponse));
+        assertThat(pollResponse(session, 1, Duration.ofSeconds(1)), is(ordinaryResponse));
+    }
+
+    @Test
+    void bindsSessionToAuthorizationIdentity() {
+        McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, "{}");
+        session.bindAuthorization(requestContext("alice", true, true));
+
+        assertThat(session.authorized(requestContext("alice", true, true)), is(true));
+        assertThat(session.authorized(requestContext("bob", true, true)), is(false));
+        assertThat(session.authorized(requestContext("alice", false, true)), is(true));
+        assertThat(session.authorized(requestContext("alice", true, false)), is(true));
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Context requestContext(String userName, boolean authenticated, boolean authorized) {
+        Context context = Context.create();
+        SecurityContext<Principal> security = mock(SecurityContext.class);
+        when(security.isAuthenticated()).thenReturn(authenticated);
+        when(security.isAuthorized()).thenReturn(authorized);
+        when(security.userPrincipal()).thenReturn(Optional.of(() -> userName));
+        when(security.servicePrincipal()).thenReturn(Optional.empty());
+        context.register(security);
+        return context;
+    }
+
     private static JsonObject pollResponse(McpSession session, long requestId, Duration timeout) {
         try {
             return session.pollResponse(requestId, timeout);
@@ -313,6 +579,23 @@ class McpSessionTest {
     private static McpSession session(McpProtocolVersion protocolVersion, String capabilities) {
         McpServerConfig config = McpServerConfig.create();
         return session(protocolVersion, capabilities, config);
+    }
+
+    private static void awaitWaiting(Thread thread) {
+        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> {
+            while (thread.getState() != Thread.State.WAITING
+                    && thread.getState() != Thread.State.TIMED_WAITING) {
+                if (!thread.isAlive()) {
+                    throw new AssertionError("Thread terminated before waiting");
+                }
+                Thread.onSpinWait();
+            }
+        });
+    }
+
+    private static void join(Thread thread) throws InterruptedException {
+        thread.join(TimeUnit.SECONDS.toMillis(5));
+        assertThat(thread.isAlive(), is(false));
     }
 
     private static McpSession session(McpProtocolVersion protocolVersion,

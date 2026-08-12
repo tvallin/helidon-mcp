@@ -29,6 +29,7 @@ class McpToolTest {
                 .schema("schema")
                 .description("description")
                 .outputSchema("outputSchema")
+                .taskSupport(McpTaskSupport.OPTIONAL)
                 .tool(request -> McpToolResult.create())
                 .build();
         McpTool tool = new McpToolImpl(config);
@@ -37,6 +38,8 @@ class McpToolTest {
         assertThat(tool.title().orElse(""), is("title"));
         assertThat(tool.description(), is("description"));
         assertThat(tool.outputSchema().orElse(""), is("outputSchema"));
+        assertThat(config.taskSupport().orElseThrow(), is(McpTaskSupport.OPTIONAL));
+        assertThat(tool.taskSupport(), is(McpTaskSupport.OPTIONAL));
     }
 
     @Test
@@ -53,6 +56,8 @@ class McpToolTest {
         assertThat(tool.title().isEmpty(), is(true));
         assertThat(tool.description(), is("description"));
         assertThat(tool.outputSchema().isPresent(), is(false));
+        assertThat(config.taskSupport().isEmpty(), is(true));
+        assertThat(tool.taskSupport(), is(McpTaskSupport.FORBIDDEN));
     }
 
     @Test
@@ -63,6 +68,7 @@ class McpToolTest {
         assertThat(foo.title().isEmpty(), is(true));
         assertThat(foo.description(), is("description"));
         assertThat(foo.outputSchema().isPresent(), is(false));
+        assertThat(foo.taskSupport(), is(McpTaskSupport.FORBIDDEN));
     }
 
     static class Foo implements McpTool {

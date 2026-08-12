@@ -71,6 +71,63 @@ class McpJsonSerializerV4Test {
         assertThat(response.objectValue("serverInfo").orElseThrow(), is(expected));
     }
 
+    @Test
+    void serializesTaskCapabilities() {
+        McpServerConfig config = McpServerConfig.builder().buildPrototype();
+        JsonObject response = SERIALIZER.createJsonInitializeResponse(Set.of(), config)
+                .build();
+        JsonObject expected = JsonParser.create("""
+                {
+                  "list": {},
+                  "cancel": {},
+                  "requests": {
+                    "tools": {
+                      "call": {}
+                    }
+                  }
+                }
+                """).readJsonObject();
+
+        JsonObject capabilities = response.objectValue("capabilities").orElseThrow();
+        assertThat(capabilities.objectValue("tasks").orElseThrow(), is(expected));
+    }
+
+    @Test
+    void serializesTaskSupportForTool() {
+        McpTool tool = new McpToolImpl(McpToolConfig.builder()
+                .name("task-tool")
+                .description("Task tool")
+                .schema("")
+                .taskSupport(McpTaskSupport.REQUIRED)
+                .tool(request -> McpToolResult.create())
+                .build());
+
+        JsonObject serialized = SERIALIZER.toJson(tool).build();
+
+        JsonObject execution = serialized.objectValue("execution").orElseThrow();
+        assertThat(execution.stringValue("taskSupport").orElseThrow(), is("required"));
+    }
+
+    @Test
+    void omitsForbiddenAndLegacyTaskSupport() {
+        McpTool forbidden = new McpToolImpl(McpToolConfig.builder()
+                .name("forbidden-tool")
+                .description("Forbidden tool")
+                .schema("")
+                .tool(request -> McpToolResult.create())
+                .build());
+        McpTool optional = new McpToolImpl(McpToolConfig.builder()
+                .name("optional-tool")
+                .description("Optional tool")
+                .schema("")
+                .taskSupport(McpTaskSupport.OPTIONAL)
+                .tool(request -> McpToolResult.create())
+                .build());
+
+        assertThat(SERIALIZER.toJson(forbidden).build().containsKey("execution"), is(false));
+        assertThat(LEGACY_SERIALIZER.toJson(optional).build().containsKey("execution"), is(false));
+    }
+
     @ParameterizedTest
     @EnumSource(value = McpProtocolVersion.class,
                 names = {"VERSION_2024_11_05", "VERSION_2025_03_26", "VERSION_2025_06_18"})
@@ -113,6 +170,7 @@ class McpJsonSerializerV4Test {
                                         "required": ["temperature"]
                                       }
                                       """)
+                .taskSupport(McpTaskSupport.OPTIONAL)
                 .tool(request -> McpToolResult.create())
                 .build();
         McpTool tool = new McpToolImpl(toolConfig);
@@ -151,6 +209,13 @@ class McpJsonSerializerV4Test {
 
         assertThat(params.value("tools").orElseThrow(), is(expected.value("tools").orElseThrow()));
         assertThat(params.value("toolChoice").orElseThrow(), is(expected.value("toolChoice").orElseThrow()));
+        assertThat(params.arrayValue("tools")
+                           .orElseThrow()
+                           .values()
+                           .getFirst()
+                           .asObject()
+                           .containsKey("execution"),
+                   is(false));
     }
 
     @ParameterizedTest

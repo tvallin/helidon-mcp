@@ -232,6 +232,21 @@ public final class Mcp {
     }
 
     /**
+     * Annotation to configure task-augmented execution support for an MCP {@link Mcp.Tool}.
+     * A tool without this annotation defaults to {@link McpTaskSupport#FORBIDDEN}.
+     */
+    @Target(METHOD)
+    @Retention(RUNTIME)
+    public @interface TaskSupport {
+        /**
+         * Task-augmented execution support for the annotated tool.
+         *
+         * @return task support
+         */
+        McpTaskSupport value();
+    }
+
+    /**
      * Tool output schema.
      */
     public @interface ToolOutputSchema {

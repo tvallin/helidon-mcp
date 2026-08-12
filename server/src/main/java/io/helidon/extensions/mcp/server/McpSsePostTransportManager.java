@@ -45,6 +45,11 @@ final class McpSsePostTransportManager implements McpTransportManager {
     }
 
     @Override
+    public void close() {
+        transport.onDisconnect();
+    }
+
+    @Override
     public void onRequest(JsonRpcRequest request, JsonRpcResponse response) {
         if (LOGGER.isLoggable(System.Logger.Level.DEBUG)) {
             LOGGER.log(System.Logger.Level.DEBUG,

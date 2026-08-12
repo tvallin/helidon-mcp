@@ -38,8 +38,25 @@ class McpJsonSerializerV4 extends McpJsonSerializerV3 {
 
     @Override
     public JsonObject.Builder createJsonInitializeResponse(Set<McpCapability> capabilities, McpServerConfig config) {
-        return super.createJsonInitializeResponse(capabilities, config)
-                .set("protocolVersion", McpProtocolVersion.VERSION_2025_11_25.text());
+        JsonObject response = super.createJsonInitializeResponse(capabilities, config)
+                .set("protocolVersion", McpProtocolVersion.VERSION_2025_11_25.text())
+                .build();
+        JsonObject.Builder tasks = JsonObject.builder()
+                .set("list", JsonObject.empty())
+                .set("cancel", JsonObject.empty())
+                .set("requests", JsonObject.builder()
+                        .set("tools", JsonObject.builder()
+                                .set("call", JsonObject.empty())
+                                .build())
+                        .build());
+
+        JsonObject serverCapabilities = response.objectValue("capabilities")
+                .map(value -> JsonObject.builder()
+                        .from(value)
+                        .set("tasks", tasks.build())
+                        .build())
+                .orElseThrow();
+        return JsonObject.builder().from(response).set("capabilities", serverCapabilities);
     }
 
     @Override
@@ -50,13 +67,24 @@ class McpJsonSerializerV4 extends McpJsonSerializerV3 {
     }
 
     @Override
+    public JsonObject.Builder toJson(McpTool tool) {
+        JsonObject.Builder builder = super.toJson(tool);
+        if (tool.taskSupport() != McpTaskSupport.FORBIDDEN) {
+            builder.set("execution", JsonObject.builder()
+                    .set("taskSupport", tool.taskSupport().text())
+                    .build());
+        }
+        return builder;
+    }
+
+    @Override
     public JsonObject.Builder toJson(McpSamplingRequest request, List<McpTool> tools) {
         validateToolMessages(request.messages());
         JsonObject.Builder params = super.toJson(request, tools);
 
         if (!tools.isEmpty()) {
             List<JsonValue> serializedTools = tools.stream()
-                    .map(this::toJson)
+                    .map(super::toJson)
                     .map(JsonObject.Builder::build)
                     .map(JsonValue.class::cast)
                     .toList();

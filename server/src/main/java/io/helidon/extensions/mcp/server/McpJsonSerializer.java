@@ -133,6 +133,26 @@ interface McpJsonSerializer {
      * JSON-RPC {@code elicitation/create} method.
      */
     String METHOD_ELICITATION_CREATE = "elicitation/create";
+    /**
+     * JSON-RPC {@code tasks/get} method.
+     */
+    String METHOD_TASKS_GET = "tasks/get";
+    /**
+     * JSON-RPC {@code tasks/result} method.
+     */
+    String METHOD_TASKS_RESULT = "tasks/result";
+    /**
+     * JSON-RPC {@code tasks/list} method.
+     */
+    String METHOD_TASKS_LIST = "tasks/list";
+    /**
+     * JSON-RPC {@code tasks/cancel} method.
+     */
+    String METHOD_TASKS_CANCEL = "tasks/cancel";
+    /**
+     * JSON-RPC {@code notifications/tasks/status} method.
+     */
+    String METHOD_NOTIFICATION_TASKS_STATUS = "notifications/tasks/status";
 
     static McpJsonSerializer create(McpProtocolVersion version) {
         return switch (version) {

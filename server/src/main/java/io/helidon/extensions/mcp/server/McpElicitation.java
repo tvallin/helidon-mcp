@@ -65,13 +65,14 @@ public final class McpElicitation extends McpFeature {
         }
         long id = session().jsonRpcId();
         JsonObject payload = session().serializer().createElicitationRequest(id, request);
-        session().prepareResponse(id);
+        session().prepareResponse(id, transport());
         try {
             transport().send(payload);
             JsonObject response = session().pollResponse(id, request.timeout());
             return session().serializer().createElicitationResponse(response);
         } finally {
             session().discardResponse(id);
+            transport().clientResponseReceived(id);
         }
     }
 }

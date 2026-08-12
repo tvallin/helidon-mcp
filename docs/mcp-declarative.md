@@ -91,11 +91,15 @@ class StatelessMcpServer {
 To explicitly keep stateful behavior, do not use this annotation.
 
 With stateless mode enabled, `initialize` is optional and clients can invoke methods such as `tools/list` without first creating
-or reusing a server session. Because request-to-request session state is not kept:
+or reusing a server session. For direct requests that skip initialization:
 
 - Data in `sessionContext()` is not preserved across independent requests.
 - Client capabilities are normally negotiated during initialization; if a client skips this phase, capability-dependent
   features will be unavailable.
+
+Tasks are enabled in stateless mode. Because task execution spans multiple requests, a task client must initialize and reuse
+the returned MCP session ID for task creation and subsequent task operations. The server rejects task operations from direct
+stateless requests that skip initialization.
 
 ### Tool
 
@@ -121,6 +125,7 @@ class Server {
 - **`@Mcp.Name`**: Overrides tool method name.
 - **`@JsonSchema.Schema`**: Explicitly defines POJO input structures.
 - **`@Mcp.Required`**: Marks a tool parameter as required.
+- **`@Mcp.TaskSupport`**: Configures task-augmented execution support for a tool.
 
 ```java
 @Mcp.Server
@@ -155,6 +160,53 @@ McpToolResult greet(@Mcp.Required String name) {
 
 `@Mcp.Required` on a framework-injected parameter (such as `McpFeatures` or `McpRequest`) is silently
 ignored and produces a codegen warning.
+
+#### Task-augmented execution
+
+The experimental Tasks feature from MCP `2025-11-25` lets a tool return a task immediately and complete its work in the
+background. Configure support by annotating the tool method with `@Mcp.TaskSupport`:
+
+```java
+@Mcp.Tool("Runs work in the background")
+@Mcp.TaskSupport(McpTaskSupport.OPTIONAL)
+McpToolResult longRunning() {
+    return McpToolResult.create("done");
+}
+```
+
+`FORBIDDEN` is the default and rejects task augmentation, `OPTIONAL` accepts either normal or task-augmented calls, and
+`REQUIRED` requires task augmentation. These modes are enforced only after negotiating MCP `2025-11-25`; earlier versions
+ignore task metadata and invoke the tool normally.
+
+Tasks are available on stateful and stateless servers and are isolated by MCP session. When MCP `2025-11-25` is negotiated,
+Helidon always advertises Tasks independently of the annotated tools. Clients use each tool's `execution.taskSupport`
+definition to discover whether that tool permits task-augmented execution. A stateless task client must initialize and reuse
+the returned session ID because a task spans multiple requests. Cancelled tasks are deleted immediately after the
+cancellation response, so later operations for their IDs return `-32602` (`Invalid params`).
+
+For MCP `2025-11-25` sessions, each task is bound to the session ID and to any Helidon Security user or service principals
+present on the creation request. Later operations from a different identity are rejected as if the task did not exist.
+
+Task management is configured globally for all MCP server features under `mcp.server.tasks`. The defaults are:
+
+```yaml
+mcp:
+  server:
+    tasks:
+      page-size: 100
+      poll-interval: PT1S
+      min-ttl: PT1S
+      default-ttl: PT1H
+      max-ttl: PT24H
+      max-tasks: 1000
+      max-tasks-per-session: 200
+```
+
+Durations use the ISO-8601 syntax supported by Helidon configuration. MCP task responses and requests express `ttl` and
+`pollInterval` in milliseconds. When `ttl` is omitted, Helidon uses `default-ttl`; requested numeric values are rounded up
+to a whole millisecond and constrained to `min-ttl` through `max-ttl`. A `page-size` of `0` returns all visible tasks in one
+page, and a `poll-interval` of `PT0S` omits the polling hint. `max-tasks` applies across all sessions, while
+`max-tasks-per-session` limits each session.
 
 #### Structured content and output schema
 

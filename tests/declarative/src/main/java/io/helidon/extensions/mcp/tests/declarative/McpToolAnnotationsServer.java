@@ -17,6 +17,7 @@
 package io.helidon.extensions.mcp.tests.declarative;
 
 import io.helidon.extensions.mcp.server.Mcp;
+import io.helidon.extensions.mcp.server.McpTaskSupport;
 
 @Mcp.Server
 @Mcp.Path("/toolAnnotations")
@@ -35,6 +36,7 @@ class McpToolAnnotationsServer {
               destructiveHint = false,
               idempotentHint = true,
               openWorldHint = false)
+    @Mcp.TaskSupport(McpTaskSupport.OPTIONAL)
     String tool2() {
         return TOOL_CONTENT;
     }

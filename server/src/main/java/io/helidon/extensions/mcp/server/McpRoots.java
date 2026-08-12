@@ -74,7 +74,7 @@ public final class McpRoots extends McpFeature {
     private List<McpRoot> sendListRoot(Duration timeout) {
         long id = session().jsonRpcId();
         JsonObject request = session().serializer().createJsonRpcRequest(id, METHOD_ROOTS_LIST).build();
-        session().prepareResponse(id);
+        session().prepareResponse(id, transport());
         try {
             transport().send(request);
             JsonObject response = session().pollResponse(id, timeout);
@@ -85,6 +85,7 @@ public final class McpRoots extends McpFeature {
             return roots;
         } finally {
             session().discardResponse(id);
+            transport().clientResponseReceived(id);
         }
     }
 

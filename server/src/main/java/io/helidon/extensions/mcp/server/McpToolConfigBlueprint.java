@@ -76,6 +76,13 @@ interface McpToolConfigBlueprint {
     Optional<String> outputSchema();
 
     /**
+     * Task-augmented execution support for this tool.
+     *
+     * @return task support, if configured
+     */
+    Optional<McpTaskSupport> taskSupport();
+
+    /**
      * Tool execution.
      *
      * @return tool execution result
