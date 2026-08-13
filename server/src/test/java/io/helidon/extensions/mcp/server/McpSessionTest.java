@@ -310,6 +310,84 @@ class McpSessionTest {
     }
 
     @Test
+    void retainsRequestTransportAfterSessionCacheEviction() {
+        McpServerConfig config = McpServerFeature.builder()
+                .maxRequestsPerSession(1)
+                .buildPrototype();
+        McpTransportManager manager = mock(McpTransportManager.class);
+        McpSession session = new McpSession(new McpSessions(config.maxSessionCount()),
+                                            manager,
+                                            config,
+                                            "test-session");
+        JsonRpcRequest firstRequest = mock(JsonRpcRequest.class);
+        JsonRpcRequest secondRequest = mock(JsonRpcRequest.class);
+        JsonRpcResponse firstResponse = mock(JsonRpcResponse.class);
+        JsonRpcResponse secondResponse = mock(JsonRpcResponse.class);
+        McpTransport firstTransport = mock(McpStreamableHttpTransport.class);
+        McpTransport secondTransport = mock(McpStreamableHttpTransport.class);
+        Context firstContext = Context.create();
+        Context secondContext = Context.create();
+        JsonValue firstId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        JsonValue secondId = JsonObject.builder().set("id", 2).build().value("id").orElseThrow();
+        when(firstRequest.context()).thenReturn(firstContext);
+        when(secondRequest.context()).thenReturn(secondContext);
+        when(manager.create(firstRequest, firstResponse)).thenReturn(firstTransport);
+        when(manager.create(secondRequest, secondResponse)).thenReturn(secondTransport);
+
+        assertThat(session.onRequest(firstId, firstRequest, firstResponse), sameInstance(session));
+        session.onRequest(secondId, secondRequest, secondResponse);
+
+        assertThat(session.transport(firstId).isEmpty(), is(true));
+        assertThat(session.requestTransport(firstContext), sameInstance(firstTransport));
+        session.send(firstContext, firstId, firstResponse);
+        verify(firstTransport).send(firstResponse);
+    }
+
+    @Test
+    void isolatesMatchingRequestIdsAcrossSessions() {
+        McpServerConfig config = McpServerFeature.builder()
+                .maxRequestsPerSession(1)
+                .buildPrototype();
+        McpTransportManager firstManager = mock(McpTransportManager.class);
+        McpTransportManager secondManager = mock(McpTransportManager.class);
+        McpSession firstSession = new McpSession(new McpSessions(config.maxSessionCount()),
+                                                 firstManager,
+                                                 config,
+                                                 "first-session");
+        McpSession secondSession = new McpSession(new McpSessions(config.maxSessionCount()),
+                                                  secondManager,
+                                                  config,
+                                                  "second-session");
+        JsonRpcRequest firstRequest = mock(JsonRpcRequest.class);
+        JsonRpcRequest secondRequest = mock(JsonRpcRequest.class);
+        JsonRpcResponse firstResponse = mock(JsonRpcResponse.class);
+        JsonRpcResponse secondResponse = mock(JsonRpcResponse.class);
+        McpTransport firstTransport = mock(McpStreamableHttpTransport.class);
+        McpTransport secondTransport = mock(McpStreamableHttpTransport.class);
+        Context firstContext = Context.create();
+        Context secondContext = Context.create();
+        JsonValue sharedId = JsonObject.builder().set("id", 1).build().value("id").orElseThrow();
+        when(firstRequest.context()).thenReturn(firstContext);
+        when(secondRequest.context()).thenReturn(secondContext);
+        when(firstManager.create(firstRequest, firstResponse)).thenReturn(firstTransport);
+        when(secondManager.create(secondRequest, secondResponse)).thenReturn(secondTransport);
+
+        firstSession.onRequest(sharedId, firstRequest, firstResponse);
+        secondSession.onRequest(sharedId, secondRequest, secondResponse);
+
+        assertThat(McpSession.requestSession(firstContext).orElseThrow(), sameInstance(firstSession));
+        assertThat(McpSession.requestSession(secondContext).orElseThrow(), sameInstance(secondSession));
+        assertThat(firstSession.requestTransport(firstContext), sameInstance(firstTransport));
+        assertThat(secondSession.requestTransport(secondContext), sameInstance(secondTransport));
+        assertThat(firstSession.findRequestTransport(secondContext).isEmpty(), is(true));
+        assertThat(secondSession.findRequestTransport(firstContext).isEmpty(), is(true));
+        firstSession.send(firstContext, sharedId, firstResponse);
+        secondSession.send(secondContext, sharedId, secondResponse);
+        verify(firstTransport).send(firstResponse);
+        verify(secondTransport).send(secondResponse);
+    }
+
+    @Test
     void sendsTaskResultThroughCapturedTransportAfterCacheEviction() {
         McpServerConfig config = McpServerFeature.builder()
                 .maxRequestsPerSession(1)
@@ -379,7 +457,7 @@ class McpSessionTest {
         session.close();
 
         assertThrows(McpInternalException.class,
-                     () -> session.createTask(new McpTasks(), Context.create()));
+                     () -> session.createTask(Context.create()));
         verify(manager).close();
     }
 
@@ -471,7 +549,7 @@ class McpSessionTest {
         awaitWaiting(closer);
 
         assertThrows(McpInternalException.class,
-                     () -> session.createTask(new McpTasks(), Context.create()));
+                     () -> session.createTask(Context.create()));
         releaseCreate.countDown();
         join(creator);
         join(closer);
@@ -502,7 +580,7 @@ class McpSessionTest {
 
         assertThat(result, sameInstance(expected));
         assertThrows(McpInternalException.class,
-                     () -> session.createTask(new McpTasks(), Context.create()));
+                     () -> session.createTask(Context.create()));
         verify(manager).close();
     }
 
@@ -510,14 +588,14 @@ class McpSessionTest {
     void taskResponseRequiresMatchingAuthorizationIdentity() {
         McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, "{}");
         Context alice = requestContext("alice", true, true);
-        McpTask task = new McpTasks().create(session, alice);
+        McpTask task = session.tasks().create(alice);
         JsonObject bobResponse = JsonObject.builder().set("id", 7).set("result", "bob").build();
         JsonObject changedAuthorizationResponse = JsonObject.builder()
                 .set("id", 7)
                 .set("result", "changed-authorization-alice")
                 .build();
         JsonObject aliceResponse = JsonObject.builder().set("id", 7).set("result", "alice").build();
-        session.prepareResponse(7, task.transport());
+        session.prepareResponse(7, task);
 
         session.acceptResponse(bobResponse, requestContext("bob", true, true));
         session.acceptResponse(changedAuthorizationResponse, requestContext("alice", false, false));
@@ -530,12 +608,12 @@ class McpSessionTest {
     void correlatesOwnedAndUnownedResponsesIndependently() {
         McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, "{}");
         Context alice = requestContext("alice", true, true);
-        McpTask task = new McpTasks().create(session, alice);
+        McpTask task = session.tasks().create(alice);
         JsonObject ordinaryResponse = JsonObject.builder().set("id", 1).set("result", "ordinary").build();
         JsonObject poisonedTaskResponse = JsonObject.builder().set("id", 2).set("result", "bob").build();
         JsonObject taskResponse = JsonObject.builder().set("id", 2).set("result", "alice").build();
         session.prepareResponse(1);
-        session.prepareResponse(2, task.transport());
+        session.prepareResponse(2, task);
 
         session.acceptResponse(poisonedTaskResponse, requestContext("bob", true, true));
         session.acceptResponse(ordinaryResponse, requestContext("bob", true, true));

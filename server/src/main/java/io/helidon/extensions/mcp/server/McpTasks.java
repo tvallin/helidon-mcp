@@ -16,141 +16,126 @@
 package io.helidon.extensions.mcp.server;
 
 import java.util.Comparator;
-import java.util.HashSet;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.Map;
+import java.util.Objects;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Consumer;
+import java.util.function.Predicate;
 
 import io.helidon.common.context.Context;
-import io.helidon.config.Config;
-import io.helidon.service.registry.Service;
+import io.helidon.service.registry.Services;
 
 import static io.helidon.jsonrpc.core.JsonRpcError.INTERNAL_ERROR;
 import static io.helidon.jsonrpc.core.JsonRpcError.INVALID_PARAMS;
 
-@Service.Singleton
 final class McpTasks {
-    static final int DEFAULT_PAGE_SIZE = 100;
-    static final long DEFAULT_POLL_INTERVAL = 1000;
-    static final long MIN_TTL = TimeUnit.SECONDS.toMillis(1);
-    static final long DEFAULT_TTL = TimeUnit.HOURS.toMillis(1);
-    static final long MAX_TTL = TimeUnit.DAYS.toMillis(1);
-    static final int MAX_TASKS = 1000;
-    static final int MAX_TASKS_PER_SESSION = 200;
-
-    private static final ScheduledThreadPoolExecutor EXPIRER = createExpirer();
-
-    private final ConcurrentMap<String, McpTask> tasks = new ConcurrentHashMap<>();
-    private final Set<McpTask> activeExecutions = ConcurrentHashMap.newKeySet();
+    private final Map<String, McpTask> tasks = new HashMap<>();
+    private final Map<McpTask, TaskEntry> retainedTasks = new IdentityHashMap<>();
+    private final McpTaskCoordinator coordinator;
     private final int pageSize;
     private final long pollInterval;
     private final long minTtl;
     private final long defaultTtl;
     private final long maxTtl;
-    private final int maxTasks;
     private final int maxTasksPerSession;
-    private final ReentrantLock lock = new ReentrantLock();
+    private final Consumer<McpTask> taskAdded;
+    private final Predicate<McpTask> taskCancellation;
+    private final Consumer<McpTask> taskExpiration;
+    private final Consumer<McpTask> taskRemoved;
+    private final Lock lock = new ReentrantLock();
+
+    private boolean active = true;
 
     McpTasks() {
-        this(McpTasksConfig.create());
+        this(Services.get(McpTaskCoordinator.class), task -> { }, McpTask::cancel, McpTask::expire, task -> { });
     }
 
-    @Service.Inject
-    McpTasks(Config config) {
-        this(McpTasksConfig.create(config.get(McpTasksConfigBlueprint.CONFIG_ROOT)));
+    McpTasks(McpTaskCoordinator coordinator) {
+        this(coordinator, task -> { }, McpTask::cancel, McpTask::expire, task -> { });
     }
 
-    McpTasks(int maxTasks, int maxTasksPerSession) {
-        this(McpTasksConfig.builder()
-                     .maxTasks(maxTasks)
-                     .maxTasksPerSession(maxTasksPerSession)
-                     .buildPrototype());
-    }
-
-    McpTasks(McpTasksConfig config) {
+    McpTasks(McpTaskCoordinator coordinator,
+             Consumer<McpTask> taskAdded,
+             Predicate<McpTask> taskCancellation,
+             Consumer<McpTask> taskExpiration,
+             Consumer<McpTask> taskRemoved) {
+        this.coordinator = Objects.requireNonNull(coordinator);
+        this.taskAdded = Objects.requireNonNull(taskAdded);
+        this.taskCancellation = Objects.requireNonNull(taskCancellation);
+        this.taskExpiration = Objects.requireNonNull(taskExpiration);
+        this.taskRemoved = Objects.requireNonNull(taskRemoved);
+        McpTasksConfig config = coordinator.config();
         this.pageSize = config.pageSize();
         this.pollInterval = config.pollInterval().toMillis();
         this.minTtl = config.minTtl().toMillis();
         this.defaultTtl = config.defaultTtl().toMillis();
         this.maxTtl = config.maxTtl().toMillis();
-        this.maxTasks = config.maxTasks();
         this.maxTasksPerSession = config.maxTasksPerSession();
     }
 
-    McpTask create(McpSession session, Context requestContext) {
+    McpTask create(Context requestContext) {
         lock.lock();
         try {
-            return createTask(new McpTaskOwner(session, requestContext), defaultTtl);
+            ensureActive();
+            return registerTask(new McpTaskOwner(requestContext), defaultTtl);
         } finally {
             lock.unlock();
         }
     }
 
-    McpTask create(McpSession session, Context requestContext, long ttl) {
+    McpTask create(Context requestContext, long ttl) {
         lock.lock();
         try {
-            return createTask(new McpTaskOwner(session, requestContext), Math.clamp(ttl, minTtl, maxTtl));
+            ensureActive();
+            return registerTask(new McpTaskOwner(requestContext), Math.clamp(ttl, minTtl, maxTtl));
         } finally {
             lock.unlock();
         }
     }
 
-    McpTask get(String taskId, McpSession session, Context requestContext) {
-        McpTask task = tasks.get(taskId);
-        if (task == null) {
-            throw new McpInternalException(INVALID_PARAMS, "Task not found: " + taskId);
-        }
-        if (task.expired(System.currentTimeMillis())) {
-            expire(task);
-            throw new McpInternalException(INVALID_PARAMS, "Task not found: " + taskId);
-        }
-        if (!task.ownedBy(new McpTaskOwner(session, requestContext))) {
-            throw new McpInternalException(INVALID_PARAMS, "Task not found: " + taskId);
-        }
-        return task;
-    }
-
-    McpTask cancel(String taskId, McpSession session, Context requestContext) {
+    McpTask get(String taskId, Context requestContext) {
         lock.lock();
         try {
-            McpTask task = get(taskId, session, requestContext);
-            if (!task.cancel()) {
+            ensureActive();
+            return getTask(taskId, new McpTaskOwner(requestContext));
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    McpTask cancel(String taskId, Context requestContext) {
+        lock.lock();
+        try {
+            ensureActive();
+            McpTask task = getTask(taskId, new McpTaskOwner(requestContext));
+            if (!taskCancellation.test(task)) {
                 throw new McpInternalException(INVALID_PARAMS, "Task is already in a terminal state: " + taskId);
             }
-            tasks.remove(taskId, task);
-            task.delete();
-            task.fail(INVALID_PARAMS, "Task not found: " + taskId);
-            task.cancelExecution("The task was cancelled by request.");
+            TaskEntry entry = retainedTasks.get(task);
+            unregister(entry);
+            try {
+                task.delete();
+                task.cancelExecution("The task was cancelled by request.");
+            } finally {
+                taskRemoved.accept(task);
+                releaseIfUnused(entry);
+            }
             return task;
         } finally {
             lock.unlock();
         }
     }
 
-    void remove(McpSession session) {
-        lock.lock();
-        try {
-            for (McpTask task : tasks.values()) {
-                if (task.ownedBy(session.id()) && tasks.remove(task.id(), task)) {
-                    task.expire();
-                }
-            }
-        } finally {
-            lock.unlock();
-        }
+    McpPage<McpTask> list(Context requestContext) {
+        return pagination(new McpTaskOwner(requestContext)).firstPage();
     }
 
-    McpPage<McpTask> list(McpSession session, Context requestContext) {
-        return pagination(new McpTaskOwner(session, requestContext)).firstPage();
-    }
-
-    McpPage<McpTask> list(McpSession session, Context requestContext, String cursor) {
-        McpPage<McpTask> page = pagination(new McpTaskOwner(session, requestContext)).page(cursor);
+    McpPage<McpTask> list(Context requestContext, String cursor) {
+        McpPage<McpTask> page = pagination(new McpTaskOwner(requestContext)).page(cursor);
         if (page == null) {
             throw new McpInternalException(INVALID_PARAMS, "Invalid task cursor: " + cursor);
         }
@@ -160,13 +145,22 @@ final class McpTasks {
     void start(McpTask task, Thread executionThread, McpFeatures features) {
         lock.lock();
         try {
-            activeExecutions.add(task);
+            ensureActive();
+            TaskEntry entry = retainedTasks.get(task);
+            if (entry == null || !entry.registered || tasks.get(task.id()) != task) {
+                throw new McpInternalException(INVALID_PARAMS, "Task not found: " + task.id());
+            }
+            if (entry.executing) {
+                throw new McpInternalException(INTERNAL_ERROR, "Task execution already started: " + task.id());
+            }
+            entry.executing = true;
             boolean started = false;
             try {
                 started = task.start(executionThread, features);
             } finally {
                 if (!started) {
-                    activeExecutions.remove(task);
+                    entry.executing = false;
+                    releaseIfUnused(entry);
                 }
             }
         } finally {
@@ -177,51 +171,87 @@ final class McpTasks {
     void executionFinished(McpTask task) {
         lock.lock();
         try {
-            activeExecutions.remove(task);
             task.executionFinished();
+            TaskEntry entry = retainedTasks.get(task);
+            if (entry != null) {
+                entry.executing = false;
+                releaseIfUnused(entry);
+            }
         } finally {
             lock.unlock();
         }
     }
 
-    private McpTask createTask(McpTaskOwner owner, long ttl) {
-        cleanupExpired();
-        Set<McpTask> retainedTasks = retainedTasks();
-        if (retainedTasks.size() >= maxTasks) {
-            throw new McpInternalException(INTERNAL_ERROR, "Task capacity reached");
+    void close() {
+        lock.lock();
+        try {
+            if (!active) {
+                return;
+            }
+            active = false;
+            for (McpTask task : List.copyOf(tasks.values())) {
+                expireTask(task);
+            }
+        } finally {
+            lock.unlock();
         }
-        long sessionTaskCount = retainedTasks.stream()
-                .filter(task -> task.ownedBy(owner.sessionId()))
-                .count();
-        if (sessionTaskCount >= maxTasksPerSession) {
+    }
+
+    private McpTask registerTask(McpTaskOwner owner, long ttl) {
+        cleanupExpired();
+        if (retainedTasks.size() >= maxTasksPerSession) {
             throw new McpInternalException(INTERNAL_ERROR, "Task capacity reached for this session");
         }
 
         McpTask task;
         do {
-            String id = UUID.randomUUID().toString();
-            task = new McpTask(id, owner, ttl, pollInterval);
-        } while (tasks.putIfAbsent(task.id(), task) != null);
+            task = McpTask.create(owner, ttl, pollInterval);
+            if (coordinator.tryReserve(task.id())) {
+                break;
+            }
+        } while (true);
 
-        McpTask expiringTask = task;
-        task.expiration(EXPIRER.schedule(() -> expire(expiringTask), ttl, TimeUnit.MILLISECONDS));
-        return task;
+        TaskEntry entry = new TaskEntry(task);
+        tasks.put(task.id(), task);
+        retainedTasks.put(task, entry);
+        try {
+            taskAdded.accept(task);
+            McpTask expiringTask = task;
+            task.expiration(coordinator.scheduleExpiration(() -> expire(expiringTask), ttl));
+            return task;
+        } catch (RuntimeException | Error e) {
+            tasks.remove(task.id(), task);
+            retainedTasks.remove(task, entry);
+            try {
+                taskRemoved.accept(task);
+            } finally {
+                task.delete();
+                coordinator.release(task.id());
+            }
+            throw e;
+        }
     }
 
     private McpPagination<McpTask> pagination(McpTaskOwner owner) {
-        cleanupExpired();
-        List<McpTask> visibleTasks = tasks.values().stream()
-                .filter(task -> task.ownedBy(owner))
-                .sorted(Comparator.comparing(McpTask::createdAt).thenComparing(McpTask::id))
-                .toList();
-        return new McpMutablePagination(visibleTasks, pageSize);
+        lock.lock();
+        try {
+            ensureActive();
+            cleanupExpired();
+            List<McpTask> visibleTasks = tasks.values().stream()
+                    .filter(task -> task.ownedBy(owner))
+                    .sorted(Comparator.comparing(McpTask::createdAt).thenComparing(McpTask::id))
+                    .toList();
+            return new McpMutablePagination(visibleTasks, pageSize);
+        } finally {
+            lock.unlock();
+        }
     }
 
     private void cleanupExpired() {
         long now = System.currentTimeMillis();
-        for (McpTask task : tasks.values()) {
+        for (McpTask task : List.copyOf(tasks.values())) {
             if (task.expired(now)) {
-                expire(task);
+                expireTask(task);
             }
         }
     }
@@ -229,28 +259,67 @@ final class McpTasks {
     private void expire(McpTask task) {
         lock.lock();
         try {
-            if (tasks.remove(task.id(), task)) {
-                task.expire();
-            }
+            expireTask(task);
         } finally {
             lock.unlock();
         }
     }
 
-    private Set<McpTask> retainedTasks() {
-        Set<McpTask> retainedTasks = new HashSet<>(tasks.values());
-        retainedTasks.addAll(activeExecutions);
-        return retainedTasks;
+    private void expireTask(McpTask task) {
+        TaskEntry entry = retainedTasks.get(task);
+        if (entry == null || !entry.registered) {
+            return;
+        }
+        unregister(entry);
+        try {
+            taskExpiration.accept(task);
+        } finally {
+            taskRemoved.accept(task);
+            releaseIfUnused(entry);
+        }
     }
 
-    private static ScheduledThreadPoolExecutor createExpirer() {
-        var executor = new ScheduledThreadPoolExecutor(1,
-                                                        Thread.ofPlatform()
-                                                                .daemon()
-                                                                .name("mcp-task-expirer")
-                                                                .factory());
-        executor.setRemoveOnCancelPolicy(true);
-        return executor;
+    private McpTask getTask(String taskId, McpTaskOwner owner) {
+        McpTask task = tasks.get(taskId);
+        if (task == null) {
+            throw new McpInternalException(INVALID_PARAMS, "Task not found: " + taskId);
+        }
+        if (task.expired(System.currentTimeMillis())) {
+            expireTask(task);
+            throw new McpInternalException(INVALID_PARAMS, "Task not found: " + taskId);
+        }
+        if (!task.ownedBy(owner)) {
+            throw new McpInternalException(INVALID_PARAMS, "Task not found: " + taskId);
+        }
+        return task;
     }
 
+    private void unregister(TaskEntry entry) {
+        if (entry.registered) {
+            tasks.remove(entry.task.id(), entry.task);
+            entry.registered = false;
+        }
+    }
+
+    private void releaseIfUnused(TaskEntry entry) {
+        if (!entry.registered && !entry.executing && retainedTasks.remove(entry.task, entry)) {
+            coordinator.release(entry.task.id());
+        }
+    }
+
+    private void ensureActive() {
+        if (!active) {
+            throw new McpInternalException("Session disconnected");
+        }
+    }
+
+    private static final class TaskEntry {
+        private final McpTask task;
+        private boolean registered = true;
+        private boolean executing;
+
+        private TaskEntry(McpTask task) {
+            this.task = task;
+        }
+    }
 }

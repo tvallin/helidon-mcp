@@ -21,9 +21,9 @@ import io.helidon.builder.api.Option;
 import io.helidon.builder.api.Prototype;
 
 /**
- * Global configuration of the MCP task manager.
+ * Application-wide MCP task configuration.
  */
-@Prototype.Blueprint(isPublic = false, decorator = McpTasksSupport.BuilderDecorator.class)
+@Prototype.Blueprint(isPublic = false, decorator = McpTasksSupport.class)
 @Prototype.Configured(McpTasksConfigBlueprint.CONFIG_ROOT)
 interface McpTasksConfigBlueprint {
     String CONFIG_ROOT = "mcp.server.tasks";
@@ -34,7 +34,7 @@ interface McpTasksConfigBlueprint {
      * @return task page size
      */
     @Option.Configured
-    @Option.DefaultInt(McpTasks.DEFAULT_PAGE_SIZE)
+    @Option.DefaultInt(100)
     int pageSize();
 
     /**
@@ -79,7 +79,7 @@ interface McpTasksConfigBlueprint {
      * @return maximum number of tasks
      */
     @Option.Configured
-    @Option.DefaultInt(McpTasks.MAX_TASKS)
+    @Option.DefaultInt(1000)
     int maxTasks();
 
     /**
@@ -88,6 +88,6 @@ interface McpTasksConfigBlueprint {
      * @return maximum number of tasks per session
      */
     @Option.Configured
-    @Option.DefaultInt(McpTasks.MAX_TASKS_PER_SESSION)
+    @Option.DefaultInt(200)
     int maxTasksPerSession();
 }

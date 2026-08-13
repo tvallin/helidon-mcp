@@ -25,9 +25,13 @@ import io.helidon.json.JsonObject;
 public final class McpElicitation extends McpFeature {
     private final boolean enabled;
 
-    McpElicitation(McpSession session, McpTransport transport) {
-        super(session, transport);
+    McpElicitation(McpSession session, McpFeatureTarget target) {
+        super(session, target);
         this.enabled = session.capabilities().contains(McpCapability.ELICITATION_FORM);
+    }
+
+    McpElicitation(McpSession session, McpTransport transport) {
+        this(session, new McpFeatureTarget.Request(transport));
     }
 
     /**
@@ -65,14 +69,13 @@ public final class McpElicitation extends McpFeature {
         }
         long id = session().jsonRpcId();
         JsonObject payload = session().serializer().createElicitationRequest(id, request);
-        session().prepareResponse(id, transport());
+        prepareResponse(id);
         try {
-            transport().send(payload);
+            send(payload);
             JsonObject response = session().pollResponse(id, request.timeout());
             return session().serializer().createElicitationResponse(response);
         } finally {
-            session().discardResponse(id);
-            transport().clientResponseReceived(id);
+            finishResponse(id);
         }
     }
 }

@@ -28,16 +28,18 @@ final class McpTaskResultWaiters {
     private static final System.Logger LOGGER = System.getLogger(McpTaskResultWaiters.class.getName());
 
     private final Map<String, Waiter> requestWaiters = new HashMap<>();
+    private final McpTaskMessages taskMessages;
     private final int capacity;
     private final Lock stateLock = new ReentrantLock();
 
     private boolean active = true;
 
-    McpTaskResultWaiters(int capacity) {
+    McpTaskResultWaiters(int capacity, McpTaskMessages taskMessages) {
         if (capacity < 1) {
             throw new IllegalArgumentException("Task result waiter capacity must be positive");
         }
         this.capacity = capacity;
+        this.taskMessages = taskMessages;
     }
 
     Waiter register(JsonValue requestId, McpTask task, McpTransport transport) {
@@ -57,7 +59,8 @@ final class McpTaskResultWaiters {
             waiter = new Waiter(requestKey,
                                 task,
                                 task.owner(),
-                                transport);
+                                transport,
+                                taskMessages);
             requestWaiters.put(requestKey, waiter);
         } finally {
             stateLock.unlock();
@@ -152,19 +155,22 @@ final class McpTaskResultWaiters {
         private final McpTask task;
         private final McpTaskOwner owner;
         private final McpTransport transport;
+        private final McpTaskMessages taskMessages;
         private final Lock stateLock = new ReentrantLock();
         private State state = State.ACTIVE;
-        private McpTaskTransport.ResultAttachment attachment;
-        private McpTaskTransport.ResultAttachment detachOnClose;
+        private boolean attached;
+        private boolean detachOnClose;
 
         private Waiter(String requestKey,
                        McpTask task,
                        McpTaskOwner owner,
-                       McpTransport transport) {
+                       McpTransport transport,
+                       McpTaskMessages taskMessages) {
             this.requestKey = requestKey;
             this.task = task;
             this.owner = owner;
             this.transport = transport;
+            this.taskMessages = taskMessages;
         }
 
         String requestKey() {
@@ -177,6 +183,14 @@ final class McpTaskResultWaiters {
 
         McpTransport transport() {
             return transport;
+        }
+
+        McpTask task() {
+            return task;
+        }
+
+        void deliveryFailed() {
+            abandon();
         }
 
         boolean abandoned() {
@@ -198,21 +212,21 @@ final class McpTaskResultWaiters {
                 stateLock.unlock();
             }
             try {
-                McpTaskTransport.ResultAttachment attachment = task.transport().attach(transport, this::abandon);
+                boolean attached = taskMessages.attach(this);
                 boolean detach;
                 stateLock.lock();
                 try {
-                    if (state != State.ACTIVE) {
+                    if (state != State.ACTIVE || !attached) {
                         detach = true;
                     } else {
-                        this.attachment = attachment;
+                        this.attached = true;
                         detach = false;
                     }
                 } finally {
                     stateLock.unlock();
                 }
                 if (detach) {
-                    task.transport().detach(attachment);
+                    taskMessages.detach(this);
                 }
                 return !detach;
             } catch (RuntimeException e) {
@@ -222,20 +236,20 @@ final class McpTaskResultWaiters {
         }
 
         private boolean claim() {
-            McpTaskTransport.ResultAttachment attachment;
+            boolean attached;
             stateLock.lock();
             try {
                 if (state != State.ACTIVE) {
                     return false;
                 }
                 state = State.CLAIMED;
-                attachment = this.attachment;
-                this.attachment = null;
+                attached = this.attached;
+                this.attached = false;
             } finally {
                 stateLock.unlock();
             }
-            if (attachment != null) {
-                task.transport().detach(attachment);
+            if (attached) {
+                taskMessages.detach(this);
             }
             return true;
         }
@@ -253,8 +267,8 @@ final class McpTaskResultWaiters {
                     return false;
                 }
                 state = State.ABANDONED;
-                detachOnClose = attachment;
-                attachment = null;
+                detachOnClose = attached;
+                attached = false;
             } finally {
                 stateLock.unlock();
             }
@@ -263,33 +277,33 @@ final class McpTaskResultWaiters {
         }
 
         private void release() {
-            McpTaskTransport.ResultAttachment attachment;
+            boolean attached;
             stateLock.lock();
             try {
-                attachment = this.attachment;
-                this.attachment = null;
+                attached = this.attached;
+                this.attached = false;
                 if (state == State.ACTIVE || state == State.CLAIMED) {
                     state = State.RELEASED;
                 }
             } finally {
                 stateLock.unlock();
             }
-            if (attachment != null) {
-                task.transport().detach(attachment);
+            if (attached) {
+                taskMessages.detach(this);
             }
         }
 
         private void closeTransport() {
-            McpTaskTransport.ResultAttachment attachment;
+            boolean attached;
             stateLock.lock();
             try {
-                attachment = detachOnClose;
-                detachOnClose = null;
+                attached = detachOnClose;
+                detachOnClose = false;
             } finally {
                 stateLock.unlock();
             }
-            if (attachment != null) {
-                task.transport().detach(attachment);
+            if (attached) {
+                taskMessages.detach(this);
             }
             try {
                 transport.close();

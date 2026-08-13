@@ -18,6 +18,7 @@ package io.helidon.extensions.mcp.server;
 import java.time.Instant;
 import java.util.Locale;
 import java.util.Objects;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -39,7 +40,6 @@ final class McpTask {
     private final long ttl;
     private final long pollInterval;
     private final CompletableFuture<Outcome> outcome = new CompletableFuture<>();
-    private final McpTaskTransport transport;
     private final ReentrantLock lock = new ReentrantLock();
     private final Condition outcomeAvailable = lock.newCondition();
 
@@ -59,7 +59,11 @@ final class McpTask {
         this.ttl = ttl;
         this.lastUpdatedAt = createdAt;
         this.pollInterval = pollInterval;
-        this.transport = new McpTaskTransport(this);
+    }
+
+    static McpTask create(McpTaskOwner owner, long ttl, long pollInterval) {
+        String id = UUID.randomUUID().toString();
+        return new McpTask(id, owner, ttl, pollInterval);
     }
 
     JsonObject toJson() {
@@ -90,7 +94,8 @@ final class McpTask {
                 return false;
             }
             update(Status.CANCELLED, "The task was cancelled by request.");
-            transport.close();
+            outcome.complete(new ErrorOutcome(INVALID_PARAMS, "Task not found: " + id));
+            outcomeAvailable.signalAll();
             return true;
         } finally {
             lock.unlock();
@@ -209,7 +214,6 @@ final class McpTask {
                 expiration.cancel(false);
                 expiration = null;
             }
-            transport.close();
         } finally {
             lock.unlock();
         }
@@ -311,10 +315,6 @@ final class McpTask {
         return now >= expiresAtMillis;
     }
 
-    boolean ownedBy(String sessionId) {
-        return owner.sameSession(sessionId);
-    }
-
     boolean ownedBy(McpTaskOwner owner) {
         return this.owner.equals(owner);
     }
@@ -325,10 +325,6 @@ final class McpTask {
 
     Instant createdAt() {
         return createdAt;
-    }
-
-    McpTaskTransport transport() {
-        return transport;
     }
 
     McpTaskOwner owner() {

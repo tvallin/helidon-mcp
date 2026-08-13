@@ -17,10 +17,13 @@ package io.helidon.extensions.mcp.server;
 
 import java.security.Principal;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -31,6 +34,7 @@ import io.helidon.config.ConfigSources;
 import io.helidon.json.JsonObject;
 import io.helidon.service.registry.Services;
 
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
 import static io.helidon.jsonrpc.core.JsonRpcError.INTERNAL_ERROR;
@@ -46,44 +50,62 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 class McpTasksTest {
+    private final List<McpTasks> taskRegistries = new ArrayList<>();
+
+    @AfterEach
+    void closeTaskRegistries() {
+        taskRegistries.forEach(McpTasks::close);
+    }
+
     @Test
-    void resolvesAsSingletonService() {
-        assertThat(Services.get(McpTasks.class), sameInstance(Services.get(McpTasks.class)));
+    void resolvesCoordinatorAsSingletonService() {
+        assertThat(Services.get(McpTaskCoordinator.class), sameInstance(Services.get(McpTaskCoordinator.class)));
+    }
+
+    @Test
+    void reservesAndReleasesCapacityByTaskId() {
+        McpTaskCoordinator coordinator = coordinatorWithCapacity(1);
+
+        assertThat(coordinator.tryReserve("first"), is(true));
+        assertThat(coordinator.tryReserve("first"), is(false));
+        McpInternalException exception = assertThrows(McpInternalException.class,
+                                                       () -> coordinator.tryReserve("second"));
+        assertThat(exception.getMessage(), is("Task capacity reached"));
+
+        coordinator.release("first");
+
+        assertThat(coordinator.tryReserve("second"), is(true));
+        coordinator.release("second");
     }
 
     @Test
     void createsWorkingTaskWithDefaultRetention() {
-        McpSession session = session("one");
-        McpTask task = new McpTasks().create(session, requestContext());
+        McpTasksConfig config = McpTasksConfig.create();
+        McpTask task = tasks(new McpTaskCoordinator(config)).create(requestContext());
 
         JsonObject json = task.toJson();
         assertThat(json.stringValue("taskId").orElseThrow(), is(task.id()));
         assertThat(json.stringValue("status").orElseThrow(), is("working"));
-        assertThat(json.numberValue("ttl").orElseThrow().longValue(), is(McpTasks.DEFAULT_TTL));
+        assertThat(json.numberValue("ttl").orElseThrow().longValue(), is(config.defaultTtl().toMillis()));
         assertThat(json.numberValue("pollInterval").orElseThrow().longValue(),
-                   is(McpTasks.DEFAULT_POLL_INTERVAL));
+                   is(config.pollInterval().toMillis()));
         assertThat(json.stringValue("createdAt").orElseThrow(), is(not("")));
         assertThat(json.stringValue("lastUpdatedAt").orElseThrow(), is(not("")));
     }
 
     @Test
     void createsTaskWithConfiguredDefaultTtlAndPollInterval() {
-        McpTasks tasks = new McpTasks(McpTasksConfig.builder()
-                                              .pollInterval(Duration.ofMillis(250))
-                                              .minTtl(Duration.ofSeconds(2))
-                                              .defaultTtl(Duration.ofSeconds(3))
-                                              .maxTtl(Duration.ofSeconds(4))
-                                              .buildPrototype());
-        McpSession session = session("one");
+        McpTasks tasks = tasks(new McpTaskCoordinator(McpTasksConfig.builder()
+                                        .pollInterval(Duration.ofMillis(250))
+                                        .minTtl(Duration.ofSeconds(2))
+                                        .defaultTtl(Duration.ofSeconds(3))
+                                        .maxTtl(Duration.ofSeconds(4))
+                                        .buildPrototype()));
 
-        try {
-            JsonObject json = tasks.create(session, requestContext()).toJson();
+        JsonObject json = tasks.create(requestContext()).toJson();
 
-            assertThat(json.numberValue("ttl").orElseThrow().longValue(), is(3000L));
-            assertThat(json.numberValue("pollInterval").orElseThrow().longValue(), is(250L));
-        } finally {
-            tasks.remove(session);
-        }
+        assertThat(json.numberValue("ttl").orElseThrow().longValue(), is(3000L));
+        assertThat(json.numberValue("pollInterval").orElseThrow().longValue(), is(250L));
     }
 
     @Test
@@ -91,22 +113,17 @@ class McpTasksTest {
         Config root = Config.just(ConfigSources.create(Map.of(
                 "mcp.server.tasks.poll-interval", "PT0.25S",
                 "mcp.server.tasks.default-ttl", "PT2S")));
-        McpTasks tasks = new McpTasks(root);
-        McpSession session = session("one");
+        McpTasks tasks = tasks(new McpTaskCoordinator(root));
 
-        try {
-            JsonObject json = tasks.create(session, requestContext()).toJson();
+        JsonObject json = tasks.create(requestContext()).toJson();
 
-            assertThat(json.numberValue("ttl").orElseThrow().longValue(), is(2000L));
-            assertThat(json.numberValue("pollInterval").orElseThrow().longValue(), is(250L));
-        } finally {
-            tasks.remove(session);
-        }
+        assertThat(json.numberValue("ttl").orElseThrow().longValue(), is(2000L));
+        assertThat(json.numberValue("pollInterval").orElseThrow().longValue(), is(250L));
     }
 
     @Test
     void completesTaskAndAddsRelatedMetadata() {
-        McpTask task = new McpTasks().create(session("one"), requestContext(), 5000);
+        McpTask task = tasks().create(requestContext(), 5000);
         JsonObject result = JsonObject.builder().set("value", "done").build();
 
         task.complete(result, false);
@@ -122,7 +139,7 @@ class McpTasksTest {
 
     @Test
     void errorToolResultFailsTaskButPreservesResult() {
-        McpTask task = new McpTasks().create(session("one"), requestContext());
+        McpTask task = tasks().create(requestContext());
         JsonObject result = JsonObject.builder().set("isError", true).build();
 
         task.complete(result, true);
@@ -134,27 +151,25 @@ class McpTasksTest {
 
     @Test
     void cancellationDeletesTaskImmediately() {
-        McpTasks tasks = new McpTasks();
-        McpSession session = session("one");
+        McpTasks tasks = tasks();
         Context requestContext = requestContext();
-        McpTask task = tasks.create(session, requestContext);
+        McpTask task = tasks.create(requestContext);
 
-        tasks.cancel(task.id(), session, requestContext);
+        tasks.cancel(task.id(), requestContext);
 
         assertThat(task.toJson().stringValue("status").orElseThrow(), is("cancelled"));
         McpInternalException getException = assertThrows(McpInternalException.class,
-                                                         () -> tasks.get(task.id(), session, requestContext));
+                                                         () -> tasks.get(task.id(), requestContext));
         assertThat(getException.code(), is(INVALID_PARAMS));
-        assertThat(tasks.list(session, requestContext).components().isEmpty(), is(true));
-        assertThrows(McpInternalException.class, () -> tasks.cancel(task.id(), session, requestContext));
+        assertThat(tasks.list(requestContext).components().isEmpty(), is(true));
+        assertThrows(McpInternalException.class, () -> tasks.cancel(task.id(), requestContext));
     }
 
     @Test
     void cancellationUnblocksExistingResultWaiter() throws Exception {
-        McpTasks tasks = new McpTasks();
-        McpSession session = session("one");
+        McpTasks tasks = tasks();
         Context requestContext = requestContext();
-        McpTask task = tasks.create(session, requestContext);
+        McpTask task = tasks.create(requestContext);
         CountDownLatch waiterStarted = new CountDownLatch(1);
         CompletableFuture<McpTask.Outcome> waiter = CompletableFuture.supplyAsync(() -> {
             waiterStarted.countDown();
@@ -164,7 +179,7 @@ class McpTasksTest {
         try {
             assertThat(waiterStarted.await(5, TimeUnit.SECONDS), is(true));
 
-            tasks.cancel(task.id(), session, requestContext);
+            tasks.cancel(task.id(), requestContext);
 
             McpTask.ErrorOutcome outcome = (McpTask.ErrorOutcome) waiter.get(5, TimeUnit.SECONDS);
             assertThat(outcome.code(), is(INVALID_PARAMS));
@@ -176,11 +191,11 @@ class McpTasksTest {
 
     @Test
     void throwingCancellationHookDoesNotFailCancellationOrSuppressInterrupt() throws Exception {
-        McpTasks tasks = new McpTasks();
+        McpTasks tasks = tasks();
         McpSession session = session("one");
         Context requestContext = requestContext();
-        McpTask task = tasks.create(session, requestContext);
-        McpFeatures features = session.createFeatures(task.transport(), requestContext);
+        McpTask task = tasks.create(requestContext);
+        McpFeatures features = session.createFeatures(task, requestContext);
         AtomicBoolean hookCalled = new AtomicBoolean();
         CountDownLatch hookFinished = new CountDownLatch(1);
         features.cancellation().registerCancellationHook(() -> {
@@ -207,7 +222,7 @@ class McpTasksTest {
         try {
             assertThat(executionStarted.await(5, TimeUnit.SECONDS), is(true));
 
-            assertDoesNotThrow(() -> tasks.cancel(task.id(), session, requestContext));
+            assertDoesNotThrow(() -> tasks.cancel(task.id(), requestContext));
 
             executionThread.join(TimeUnit.SECONDS.toMillis(5));
             assertThat(hookFinished.await(5, TimeUnit.SECONDS), is(true));
@@ -223,57 +238,55 @@ class McpTasksTest {
 
     @Test
     void isolatesTasksBySession() {
-        McpTasks tasks = new McpTasks();
-        McpSession owner = session("owner");
+        McpTaskCoordinator coordinator = new McpTaskCoordinator();
+        McpTasks ownerTasks = tasks(coordinator);
+        McpTasks otherTasks = tasks(coordinator);
         Context requestContext = requestContext();
-        McpTask task = tasks.create(owner, requestContext);
+        McpTask task = ownerTasks.create(requestContext);
 
-        assertThat(tasks.get(task.id(), owner, requestContext), sameInstance(task));
+        assertThat(ownerTasks.get(task.id(), requestContext), sameInstance(task));
         McpInternalException exception = assertThrows(McpInternalException.class,
-                                                       () -> tasks.get(task.id(), session("other"), requestContext));
+                                                       () -> otherTasks.get(task.id(), requestContext));
         assertThat(exception.code(), is(INVALID_PARAMS));
     }
 
     @Test
     void clampsRequestedTtl() {
-        McpTasks tasks = new McpTasks();
-        McpSession session = session("one");
+        McpTasksConfig config = McpTasksConfig.create();
+        McpTasks tasks = tasks(new McpTaskCoordinator(config));
         Context requestContext = requestContext();
-        McpTask shortTask = tasks.create(session, requestContext, 0);
-        McpTask longTask = tasks.create(session, requestContext, Long.MAX_VALUE);
+        McpTask shortTask = tasks.create(requestContext, 0);
+        McpTask longTask = tasks.create(requestContext, Long.MAX_VALUE);
 
-        assertThat(shortTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(McpTasks.MIN_TTL));
-        assertThat(longTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(McpTasks.MAX_TTL));
+        assertThat(shortTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(config.minTtl().toMillis()));
+        assertThat(longTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(config.maxTtl().toMillis()));
     }
 
     @Test
     void clampsRequestedTtlToConfiguredRange() {
-        McpTasks tasks = new McpTasks(McpTasksConfig.builder()
-                                              .minTtl(Duration.ofSeconds(2))
-                                              .defaultTtl(Duration.ofSeconds(3))
-                                              .maxTtl(Duration.ofSeconds(4))
-                                              .buildPrototype());
-        McpSession session = session("one");
+        McpTasks tasks = tasks(new McpTaskCoordinator(McpTasksConfig.builder()
+                                        .minTtl(Duration.ofSeconds(2))
+                                        .defaultTtl(Duration.ofSeconds(3))
+                                        .maxTtl(Duration.ofSeconds(4))
+                                        .buildPrototype()));
         Context requestContext = requestContext();
 
-        try {
-            McpTask shortTask = tasks.create(session, requestContext, 1);
-            McpTask longTask = tasks.create(session, requestContext, Long.MAX_VALUE);
+        McpTask shortTask = tasks.create(requestContext, 1);
+        McpTask longTask = tasks.create(requestContext, Long.MAX_VALUE);
 
-            assertThat(shortTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(2000L));
-            assertThat(longTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(4000L));
-        } finally {
-            tasks.remove(session);
-        }
+        assertThat(shortTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(2000L));
+        assertThat(longTask.toJson().numberValue("ttl").orElseThrow().longValue(), is(4000L));
     }
 
     @Test
     void cancelledExecutionRetainsCapacityUntilWorkerExits() throws Exception {
-        McpTasks tasks = new McpTasks(1, 1);
+        McpTaskCoordinator coordinator = coordinatorWithCapacity(1);
+        McpTasks tasks = tasks(coordinator);
+        McpTasks otherTasks = tasks(coordinator);
         McpSession session = session("one");
         Context requestContext = requestContext();
-        McpTask task = tasks.create(session, requestContext);
-        McpFeatures features = session.createFeatures(task.transport(), requestContext);
+        McpTask task = tasks.create(requestContext);
+        McpFeatures features = session.createFeatures(task, requestContext);
         CountDownLatch executionStarted = new CountDownLatch(1);
         CountDownLatch executionRelease = new CountDownLatch(1);
         Thread executionThread = Thread.ofVirtual().unstarted(() -> {
@@ -294,167 +307,253 @@ class McpTasksTest {
 
         try {
             assertThat(executionStarted.await(5, TimeUnit.SECONDS), is(true));
-            tasks.cancel(task.id(), session, requestContext);
+            tasks.cancel(task.id(), requestContext);
 
-            assertThrows(McpInternalException.class, () -> tasks.create(session, requestContext));
+            assertThrows(McpInternalException.class, () -> otherTasks.create(requestContext));
         } finally {
             executionRelease.countDown();
             executionThread.join(TimeUnit.SECONDS.toMillis(5));
         }
 
-        assertDoesNotThrow(() -> tasks.create(session, requestContext));
+        assertDoesNotThrow(() -> otherTasks.create(requestContext));
     }
 
     @Test
-    void paginatesTasksAndFiltersBySession() {
-        McpTasks tasks = new McpTasks();
-        McpSession owner = session("owner");
-        McpSession other = session("other");
+    void paginatesTasksWithinSessionRegistry() {
+        McpTasksConfig config = McpTasksConfig.create();
+        McpTaskCoordinator coordinator = new McpTaskCoordinator(config);
+        McpTasks ownerTasks = tasks(coordinator);
+        McpTasks otherTasks = tasks(coordinator);
         Context requestContext = requestContext();
-        for (int i = 0; i < McpTasks.DEFAULT_PAGE_SIZE + 1; i++) {
-            tasks.create(owner, requestContext);
+        for (int i = 0; i < config.pageSize() + 1; i++) {
+            ownerTasks.create(requestContext);
         }
-        McpTask otherTask = tasks.create(other, requestContext);
+        McpTask otherTask = otherTasks.create(requestContext);
 
-        McpPage<McpTask> first = tasks.list(owner, requestContext);
-        McpPage<McpTask> second = tasks.list(owner, requestContext, first.cursor());
+        McpPage<McpTask> first = ownerTasks.list(requestContext);
+        McpPage<McpTask> second = ownerTasks.list(requestContext, first.cursor());
 
-        assertThat(first.components().size(), is(McpTasks.DEFAULT_PAGE_SIZE));
+        assertThat(first.components().size(), is(config.pageSize()));
         assertThat(first.cursor(), is(not("")));
         assertThat(second.components().size(), is(1));
         assertThat(second.cursor(), is(""));
         McpInternalException exception = assertThrows(McpInternalException.class,
-                                                       () -> tasks.list(owner, requestContext, otherTask.id()));
+                                                       () -> ownerTasks.list(requestContext, otherTask.id()));
         assertThat(exception.code(), is(INVALID_PARAMS));
     }
 
     @Test
     void paginatesTasksUsingConfiguredPageSize() {
-        McpTasks tasks = new McpTasks(McpTasksConfig.builder().pageSize(2).buildPrototype());
-        McpSession owner = session("owner");
-        McpSession other = session("other");
+        McpTaskCoordinator coordinator = new McpTaskCoordinator(McpTasksConfig.builder()
+                                                                        .pageSize(2)
+                                                                        .buildPrototype());
+        McpTasks ownerTasks = tasks(coordinator);
+        McpTasks otherTasks = tasks(coordinator);
         Context requestContext = requestContext();
-        try {
-            tasks.create(owner, requestContext);
-            tasks.create(owner, requestContext);
-            tasks.create(owner, requestContext);
-            tasks.create(other, requestContext);
+        ownerTasks.create(requestContext);
+        ownerTasks.create(requestContext);
+        ownerTasks.create(requestContext);
+        otherTasks.create(requestContext);
 
-            McpPage<McpTask> first = tasks.list(owner, requestContext);
-            McpPage<McpTask> second = tasks.list(owner, requestContext, first.cursor());
+        McpPage<McpTask> first = ownerTasks.list(requestContext);
+        McpPage<McpTask> second = ownerTasks.list(requestContext, first.cursor());
 
-            assertThat(first.components().size(), is(2));
-            assertThat(first.cursor(), is(not("")));
-            assertThat(second.components().size(), is(1));
-            assertThat(second.cursor(), is(""));
-        } finally {
-            tasks.remove(owner);
-            tasks.remove(other);
-        }
+        assertThat(first.components().size(), is(2));
+        assertThat(first.cursor(), is(not("")));
+        assertThat(second.components().size(), is(1));
+        assertThat(second.cursor(), is(""));
     }
 
     @Test
     void enforcesConfiguredGlobalCapacity() {
-        McpTasks tasks = new McpTasks(McpTasksConfig.builder()
-                                              .maxTasks(2)
-                                              .maxTasksPerSession(2)
-                                              .buildPrototype());
+        McpTaskCoordinator coordinator = new McpTaskCoordinator(McpTasksConfig.builder()
+                                                                        .maxTasks(2)
+                                                                        .maxTasksPerSession(2)
+                                                                        .buildPrototype());
+        McpTasks firstTasks = tasks(coordinator);
+        McpTasks secondTasks = tasks(coordinator);
+        McpTasks thirdTasks = tasks(coordinator);
         Context requestContext = requestContext();
-        McpSession one = session("one");
-        McpSession two = session("two");
 
-        try {
-            tasks.create(one, requestContext);
-            tasks.create(two, requestContext);
-            McpInternalException exception = assertThrows(McpInternalException.class,
-                                                           () -> tasks.create(session("three"), requestContext));
+        firstTasks.create(requestContext);
+        secondTasks.create(requestContext);
+        McpInternalException exception = assertThrows(McpInternalException.class,
+                                                       () -> thirdTasks.create(requestContext));
 
-            assertThat(exception.code(), is(INTERNAL_ERROR));
-            assertThat(exception.getMessage(), is("Task capacity reached"));
-        } finally {
-            tasks.remove(one);
-            tasks.remove(two);
+        assertThat(exception.code(), is(INTERNAL_ERROR));
+        assertThat(exception.getMessage(), is("Task capacity reached"));
+    }
+
+    @Test
+    void reservesGlobalCapacityAtomicallyAcrossSessions() throws Exception {
+        McpTaskCoordinator coordinator = coordinatorWithCapacity(1);
+        McpTasks firstTasks = tasks(coordinator);
+        McpTasks secondTasks = tasks(coordinator);
+        CountDownLatch ready = new CountDownLatch(2);
+        CountDownLatch release = new CountDownLatch(1);
+
+        List<Object> results;
+        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+            CompletableFuture<Object> first = CompletableFuture.supplyAsync(
+                    () -> createAfterRelease(firstTasks, ready, release), executor);
+            CompletableFuture<Object> second = CompletableFuture.supplyAsync(
+                    () -> createAfterRelease(secondTasks, ready, release), executor);
+            assertThat(ready.await(5, TimeUnit.SECONDS), is(true));
+            release.countDown();
+            results = List.of(first.get(5, TimeUnit.SECONDS), second.get(5, TimeUnit.SECONDS));
         }
+
+        assertThat(results.stream().filter(McpTask.class::isInstance).count(), is(1L));
+        McpInternalException failure = results.stream()
+                .filter(McpInternalException.class::isInstance)
+                .map(McpInternalException.class::cast)
+                .findFirst()
+                .orElseThrow();
+        assertThat(failure.getMessage(), is("Task capacity reached"));
     }
 
     @Test
     void enforcesConfiguredPerSessionCapacity() {
-        McpTasks tasks = new McpTasks(McpTasksConfig.builder()
-                                              .maxTasks(3)
-                                              .maxTasksPerSession(1)
-                                              .buildPrototype());
-        McpSession owner = session("owner");
-        McpSession other = session("other");
+        McpTaskCoordinator coordinator = new McpTaskCoordinator(McpTasksConfig.builder()
+                                                                        .maxTasks(3)
+                                                                        .maxTasksPerSession(1)
+                                                                        .buildPrototype());
+        McpTasks ownerTasks = tasks(coordinator);
+        McpTasks otherTasks = tasks(coordinator);
         Context requestContext = requestContext();
 
-        try {
-            tasks.create(owner, requestContext);
-            McpInternalException exception = assertThrows(McpInternalException.class,
-                                                           () -> tasks.create(owner, requestContext));
+        ownerTasks.create(requestContext);
+        McpInternalException exception = assertThrows(McpInternalException.class,
+                                                       () -> ownerTasks.create(requestContext));
 
-            assertThat(exception.code(), is(INTERNAL_ERROR));
-            assertThat(exception.getMessage(), is("Task capacity reached for this session"));
-            assertDoesNotThrow(() -> tasks.create(other, requestContext));
-        } finally {
-            tasks.remove(owner);
-            tasks.remove(other);
-        }
+        assertThat(exception.code(), is(INTERNAL_ERROR));
+        assertThat(exception.getMessage(), is("Task capacity reached for this session"));
+        assertDoesNotThrow(() -> otherTasks.create(requestContext));
     }
 
     @Test
     void isolatesTasksByAuthorizationIdentity() {
-        McpTasks tasks = new McpTasks();
-        McpSession session = session("one");
+        McpTasks tasks = tasks();
         Context alice = requestContext("alice");
         Context anotherAliceRequest = requestContext("alice");
         Context bob = requestContext("bob");
-        McpTask task = tasks.create(session, alice);
+        McpTask task = tasks.create(alice);
 
-        assertThat(tasks.get(task.id(), session, anotherAliceRequest), sameInstance(task));
+        assertThat(tasks.get(task.id(), anotherAliceRequest), sameInstance(task));
         McpInternalException exception = assertThrows(McpInternalException.class,
-                                                       () -> tasks.get(task.id(), session, bob));
+                                                       () -> tasks.get(task.id(), bob));
         assertThat(exception.code(), is(INVALID_PARAMS));
-        assertThat(tasks.list(session, bob).components().isEmpty(), is(true));
+        assertThat(tasks.list(bob).components().isEmpty(), is(true));
         McpInternalException cursorException = assertThrows(McpInternalException.class,
-                                                             () -> tasks.list(session, bob, task.id()));
+                                                             () -> tasks.list(bob, task.id()));
         assertThat(cursorException.code(), is(INVALID_PARAMS));
     }
 
     @Test
     void usesStablePrincipalIdentityAcrossAuthorizationDecisions() {
-        McpTasks tasks = new McpTasks();
-        McpSession session = session("one");
+        McpTasks tasks = tasks();
         Context authenticated = requestContext("alice", true, true);
-        McpTask task = tasks.create(session, authenticated);
+        McpTask task = tasks.create(authenticated);
 
-        assertThat(tasks.get(task.id(), session, requestContext("alice", false, true)), sameInstance(task));
-        assertThat(tasks.get(task.id(), session, requestContext("alice", true, false)), sameInstance(task));
+        assertThat(tasks.get(task.id(), requestContext("alice", false, true)), sameInstance(task));
+        assertThat(tasks.get(task.id(), requestContext("alice", true, false)), sameInstance(task));
+    }
+
+    @Test
+    void sessionCloseRemovesTasksAndReleasesGlobalCapacity() {
+        McpTaskCoordinator coordinator = coordinatorWithCapacity(1);
+        McpSession owner = session("owner", coordinator);
+        Context requestContext = requestContext();
+        McpTask task = owner.tasks().create(requestContext);
+
+        owner.close();
+
+        assertThrows(McpInternalException.class, () -> owner.tasks().get(task.id(), requestContext));
+        assertThat(task.awaitOutcome(), instanceOf(McpTask.ErrorOutcome.class));
+        McpSession replacement = session("replacement", coordinator);
+        try {
+            assertDoesNotThrow(() -> replacement.tasks().create(requestContext));
+        } finally {
+            replacement.close();
+        }
+    }
+
+    @Test
+    void sessionCloseRetainsCapacityUntilRunningWorkerExits() throws Exception {
+        McpTaskCoordinator coordinator = coordinatorWithCapacity(1);
+        McpSession owner = session("owner", coordinator);
+        McpSession replacement = session("replacement", coordinator);
+        Context requestContext = requestContext();
+        McpTask task = owner.tasks().create(requestContext);
+        McpFeatures features = owner.createFeatures(task, requestContext);
+        CountDownLatch executionStarted = new CountDownLatch(1);
+        CountDownLatch executionRelease = new CountDownLatch(1);
+        Thread executionThread = Thread.ofVirtual().unstarted(() -> {
+            try {
+                executionStarted.countDown();
+                while (executionRelease.getCount() != 0) {
+                    try {
+                        executionRelease.await();
+                    } catch (InterruptedException e) {
+                        // Deliberately ignore session-close cancellation to verify retained capacity.
+                    }
+                }
+            } finally {
+                owner.tasks().executionFinished(task);
+            }
+        });
+        owner.tasks().start(task, executionThread, features);
+
+        try {
+            assertThat(executionStarted.await(5, TimeUnit.SECONDS), is(true));
+
+            owner.close();
+
+            assertThrows(McpInternalException.class, () -> replacement.tasks().create(requestContext));
+        } finally {
+            executionRelease.countDown();
+            executionThread.join(TimeUnit.SECONDS.toMillis(5));
+            owner.close();
+        }
+
+        try {
+            assertDoesNotThrow(() -> replacement.tasks().create(requestContext));
+        } finally {
+            replacement.close();
+        }
     }
 
     @Test
     void sessionEvictionRemovesOwnedTasks() {
         McpServerConfig config = McpServerConfig.create();
-        McpTasks tasks = new McpTasks();
-        McpSessions sessions = new McpSessions(1, session -> {
-            session.close();
-            tasks.remove(session);
-        });
-        McpSession owner = new McpSession(sessions, mock(McpTransportManager.class), config, "owner");
+        McpTaskCoordinator coordinator = coordinatorWithCapacity(1);
+        McpSessions sessions = new McpSessions(1, McpSession::close);
+        McpSession owner = new McpSession(sessions,
+                                          mock(McpTransportManager.class),
+                                          config,
+                                          coordinator,
+                                          "owner");
         owner.protocolVersion(McpProtocolVersion.VERSION_2025_11_25);
         sessions.put(owner.id(), owner);
         Context requestContext = requestContext();
-        McpTask task = tasks.create(owner, requestContext);
+        McpTask task = owner.tasks().create(requestContext);
         McpSession replacement = new McpSession(sessions,
                                                 mock(McpTransportManager.class),
                                                 config,
+                                                coordinator,
                                                 "replacement");
         replacement.protocolVersion(McpProtocolVersion.VERSION_2025_11_25);
 
         sessions.put(replacement.id(), replacement);
 
         assertThat(sessions.get(owner.id()).isEmpty(), is(true));
-        assertThrows(McpInternalException.class, () -> tasks.get(task.id(), owner, requestContext));
+        assertThrows(McpInternalException.class, () -> owner.tasks().get(task.id(), requestContext));
         assertThat(task.awaitOutcome(), instanceOf(McpTask.ErrorOutcome.class));
+        try {
+            assertDoesNotThrow(() -> replacement.tasks().create(requestContext));
+        } finally {
+            replacement.close();
+        }
     }
 
     private Context requestContext() {
@@ -478,10 +577,59 @@ class McpTasksTest {
         return context;
     }
 
+    private Object createAfterRelease(McpTasks tasks, CountDownLatch ready, CountDownLatch release) {
+        ready.countDown();
+        try {
+            if (!release.await(5, TimeUnit.SECONDS)) {
+                throw new AssertionError("Timed out waiting to create task");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError("Interrupted while waiting to create task", e);
+        }
+        try {
+            return tasks.create(requestContext());
+        } catch (McpInternalException e) {
+            return e;
+        }
+    }
+
+    private McpTasks tasks() {
+        return tasks(new McpTaskCoordinator());
+    }
+
+    private McpTaskCoordinator coordinatorWithCapacity(int capacity) {
+        return new McpTaskCoordinator(McpTasksConfig.builder()
+                                              .maxTasks(capacity)
+                                              .maxTasksPerSession(capacity)
+                                              .buildPrototype());
+    }
+
+    private McpTasks tasks(McpTaskCoordinator coordinator) {
+        McpTasks tasks = new McpTasks(coordinator);
+        taskRegistries.add(tasks);
+        return tasks;
+    }
+
     private McpSession session(String id) {
         McpServerConfig config = McpServerConfig.create();
         McpSessions sessions = new McpSessions(config.maxSessionCount());
-        McpSession session = new McpSession(sessions, mock(McpTransportManager.class), config, id);
+        McpSession session = new McpSession(sessions,
+                                            mock(McpTransportManager.class),
+                                            config,
+                                            id);
+        session.protocolVersion(McpProtocolVersion.VERSION_2025_11_25);
+        return session;
+    }
+
+    private McpSession session(String id, McpTaskCoordinator coordinator) {
+        McpServerConfig config = McpServerConfig.create();
+        McpSessions sessions = new McpSessions(config.maxSessionCount());
+        McpSession session = new McpSession(sessions,
+                                            mock(McpTransportManager.class),
+                                            config,
+                                            coordinator,
+                                            id);
         session.protocolVersion(McpProtocolVersion.VERSION_2025_11_25);
         return session;
     }

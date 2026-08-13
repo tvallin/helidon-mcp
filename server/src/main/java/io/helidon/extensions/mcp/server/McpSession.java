@@ -35,6 +35,7 @@ import io.helidon.common.context.Context;
 import io.helidon.json.JsonException;
 import io.helidon.json.JsonObject;
 import io.helidon.json.JsonValue;
+import io.helidon.service.registry.Services;
 import io.helidon.webserver.http.ServerResponse;
 import io.helidon.webserver.jsonrpc.JsonRpcRequest;
 import io.helidon.webserver.jsonrpc.JsonRpcResponse;
@@ -56,7 +57,9 @@ class McpSession {
     private final LruCache<String, McpTransport> transports;
     private final LazyValue<McpSessionFeatures> sessionFeatures;
     private final McpPendingResponses pendingResponses;
+    private final McpTaskMessages taskMessages;
     private final McpTaskResultWaiters taskResultWaiters;
+    private final McpTasks tasks;
     private final Lock lifecycleLock = new ReentrantLock();
     private final Condition lifecycleChanged = lifecycleLock.newCondition();
     private final Set<String> creatingTransports = new HashSet<>();
@@ -74,16 +77,33 @@ class McpSession {
     private boolean closeStarted;
     private int activeOperations;
 
-    McpSession(McpSessions sessions, McpTransportManager manager, McpServerConfig config, String id) {
+    McpSession(McpSessions sessions,
+               McpTransportManager manager,
+               McpServerConfig config,
+               String id) {
+        this(sessions, manager, config, Services.get(McpTaskCoordinator.class), id);
+    }
+
+    McpSession(McpSessions sessions,
+               McpTransportManager manager,
+               McpServerConfig config,
+               McpTaskCoordinator taskCoordinator,
+               String id) {
         this.id = id;
         this.manager = manager;
         this.sessions = sessions;
         this.clientCapabilities = new HashSet<>();
+        this.taskMessages = new McpTaskMessages();
+        this.tasks = new McpTasks(taskCoordinator,
+                                  taskMessages::register,
+                                  taskMessages::cancel,
+                                  taskMessages::expire,
+                                  taskMessages::close);
         this.featureListeners = new CopyOnWriteArrayList<>();
         this.features = LruCache.create(config.maxRequestsPerSession());
         this.transports = LruCache.create(config.maxRequestsPerSession());
         this.pendingResponses = new McpPendingResponses(config.maxRequestsPerSession());
-        this.taskResultWaiters = new McpTaskResultWaiters(config.maxRequestsPerSession());
+        this.taskResultWaiters = new McpTaskResultWaiters(config.maxRequestsPerSession(), taskMessages);
         this.featureListeners.add(McpProgress.McpProgressListener.create());
         this.sessionFeatures = LazyValue.create(() -> new McpSessionFeatures(this));
         this.context.register(McpServerConfigBlueprint.class, config);
@@ -143,15 +163,38 @@ class McpSession {
         }
     }
 
-    McpTransport onRequest(JsonValue id, JsonRpcRequest req, JsonRpcResponse res) {
+    McpSession onRequest(JsonValue id, JsonRpcRequest req, JsonRpcResponse res) {
         beginActiveOperation();
         try {
             McpTransport transport = createTransport(id.toString(), req, res);
+            req.context().register(new SessionRequest(this, transport));
             manager.onRequest(req, res);
-            return transport;
+            return this;
         } finally {
             endActiveOperation();
         }
+    }
+
+    void send(Context requestContext, JsonValue requestId, JsonRpcResponse response) {
+        send(requestId, response, requestTransport(requestContext));
+    }
+
+    McpTransport requestTransport(Context requestContext) {
+        return requestContext.get(SessionRequest.class)
+                .filter(request -> request.session() == this)
+                .map(SessionRequest::transport)
+                .orElseThrow(() -> new McpInternalException("Session request transport not found"));
+    }
+
+    Optional<McpTransport> findRequestTransport(Context requestContext) {
+        return requestContext.get(SessionRequest.class)
+                .filter(request -> request.session() == this)
+                .map(SessionRequest::transport);
+    }
+
+    static Optional<McpSession> requestSession(Context requestContext) {
+        Optional<SessionRequest> request = requestContext.get(SessionRequest.class);
+        return request.map(SessionRequest::session);
     }
 
     McpTransport createTransport(JsonValue id, JsonRpcRequest req, JsonRpcResponse res) {
@@ -191,7 +234,7 @@ class McpSession {
     void acceptResponse(JsonObject response, Context requestContext) {
         try {
             long requestId = response.longValue("id").orElseThrow();
-            pendingResponses.accept(requestId, response, new McpTaskOwner(this, requestContext));
+            pendingResponses.accept(requestId, response, new McpTaskOwner(requestContext));
         } catch (JsonException | NoSuchElementException e) {
             if (LOGGER.isLoggable(Level.TRACE)) {
                 LOGGER.log(Level.TRACE, "Received a response with wrong request id type", e);
@@ -203,12 +246,30 @@ class McpSession {
         pendingResponses.prepare(requestId);
     }
 
-    void prepareResponse(long requestId, McpTransport transport) {
-        Optional<McpTaskOwner> owner = transport.taskOwner();
-        if (owner.isPresent()) {
-            pendingResponses.prepare(requestId, owner.get());
+    void prepareResponse(long requestId, McpFeatureTarget target) {
+        if (target instanceof McpFeatureTarget.Task taskTarget) {
+            pendingResponses.prepare(requestId, taskTarget.task().owner());
         } else {
             pendingResponses.prepare(requestId);
+        }
+    }
+
+    void prepareResponse(long requestId, McpTask task) {
+        pendingResponses.prepare(requestId, task.owner());
+    }
+
+    void finishResponse(long requestId, McpFeatureTarget target) {
+        discardResponse(requestId);
+        if (target instanceof McpFeatureTarget.Task taskTarget) {
+            taskMessages.clientResponseReceived(taskTarget.task(), requestId);
+        }
+    }
+
+    void send(McpFeatureTarget target, JsonObject message) {
+        if (target instanceof McpFeatureTarget.Request requestTarget) {
+            requestTarget.transport().send(message);
+        } else if (target instanceof McpFeatureTarget.Task taskTarget) {
+            taskMessages.send(taskTarget.task(), message);
         }
     }
 
@@ -229,26 +290,30 @@ class McpSession {
     }
 
     boolean abandonTaskResult(JsonValue requestId, Context requestContext) {
-        return taskResultWaiters.abandon(requestId, new McpTaskOwner(this, requestContext));
+        return taskResultWaiters.abandon(requestId, new McpTaskOwner(requestContext));
     }
 
     void discardTaskResult(McpTaskResultWaiters.Waiter waiter) {
         taskResultWaiters.discard(waiter);
     }
 
-    McpTask createTask(McpTasks tasks, Context requestContext) {
+    McpTask createTask(Context requestContext) {
         beginActiveOperation();
         try {
-            return tasks.create(this, requestContext);
+            return tasks.create(requestContext);
         } finally {
             endActiveOperation();
         }
     }
 
-    McpTask createTask(McpTasks tasks, Context requestContext, long ttl) {
+    McpTask cancelTask(String taskId, Context requestContext) {
+        return tasks.cancel(taskId, requestContext);
+    }
+
+    McpTask createTask(Context requestContext, long ttl) {
         beginActiveOperation();
         try {
-            return tasks.create(this, requestContext, ttl);
+            return tasks.create(requestContext, ttl);
         } finally {
             endActiveOperation();
         }
@@ -270,6 +335,14 @@ class McpSession {
 
     McpFeatures createFeatures(McpTransport transport, Context requestContext) {
         return new McpFeatures(this, transport, requestContext);
+    }
+
+    McpFeatures createFeatures(McpTask task, Context requestContext) {
+        return new McpFeatures(this, task, requestContext);
+    }
+
+    void closeTaskMessages(McpTask task) {
+        taskMessages.close(task);
     }
 
     JsonObject pollResponse(long requestId, Duration timeout) {
@@ -310,6 +383,10 @@ class McpSession {
 
     McpSessions sessions() {
         return sessions;
+    }
+
+    McpTasks tasks() {
+        return tasks;
     }
 
     String id() {
@@ -412,6 +489,8 @@ class McpSession {
 
     private void closeResources() {
         taskResultWaiters.disconnect();
+        taskMessages.disconnect();
+        tasks.close();
         pendingResponses.disconnect();
         manager.close();
     }
@@ -491,6 +570,9 @@ class McpSession {
         INITIALIZED,
         INITIALIZING,
         UNINITIALIZED
+    }
+
+    private record SessionRequest(McpSession session, McpTransport transport) {
     }
 
 }

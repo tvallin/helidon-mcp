@@ -22,22 +22,13 @@ import java.util.stream.Stream;
 import io.helidon.common.context.Context;
 import io.helidon.common.security.SecurityContext;
 
-record McpTaskOwner(String sessionId, AuthorizationIdentity authorizationIdentity) {
+record McpTaskOwner(AuthorizationIdentity authorizationIdentity) {
     McpTaskOwner {
-        Objects.requireNonNull(sessionId);
         Objects.requireNonNull(authorizationIdentity);
     }
 
-    McpTaskOwner(McpSession session, Context requestContext) {
-        this(session.id(), authorizationIdentity(requestContext));
-    }
-
-    McpTaskOwner(String sessionId) {
-        this(sessionId, new AuthorizationIdentity(List.of()));
-    }
-
-    boolean sameSession(String sessionId) {
-        return this.sessionId.equals(sessionId);
+    McpTaskOwner(Context requestContext) {
+        this(authorizationIdentity(requestContext));
     }
 
     static AuthorizationIdentity authorizationIdentity(Context context) {

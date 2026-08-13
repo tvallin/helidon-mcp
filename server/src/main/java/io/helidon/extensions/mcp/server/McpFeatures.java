@@ -65,21 +65,29 @@ public final class McpFeatures {
     private final LazyValue<McpCancellation> cancellation;
 
     McpFeatures(McpSession session, McpTransport transport) {
-        this(session, transport, Context.create());
+        this(session, new McpFeatureTarget.Request(transport), Context.create());
     }
 
     McpFeatures(McpSession session, McpTransport transport, Context requestContext) {
+        this(session, new McpFeatureTarget.Request(transport), requestContext);
+    }
+
+    McpFeatures(McpSession session, McpTask task, Context requestContext) {
+        this(session, new McpFeatureTarget.Task(task), requestContext);
+    }
+
+    private McpFeatures(McpSession session, McpFeatureTarget target, Context requestContext) {
         Objects.requireNonNull(session, "session is null");
-        Objects.requireNonNull(transport, "transport is null");
+        Objects.requireNonNull(target, "target is null");
         Objects.requireNonNull(requestContext, "request context is null");
         this.session = session;
         this.requestContext = requestContext;
         this.cancellation = LazyValue.create(McpCancellation::new);
-        this.roots = LazyValue.create(() -> new McpRoots(session, transport));
-        this.logger = LazyValue.create(() -> new McpLogger(session, transport));
-        this.sampling = LazyValue.create(() -> new McpSampling(session, transport, this));
-        this.progress = LazyValue.create(() -> new McpProgress(session, transport));
-        this.elicitation = LazyValue.create(() -> new McpElicitation(session, transport));
+        this.roots = LazyValue.create(() -> new McpRoots(session, target));
+        this.logger = LazyValue.create(() -> new McpLogger(session, target));
+        this.sampling = LazyValue.create(() -> new McpSampling(session, target, this));
+        this.progress = LazyValue.create(() -> new McpProgress(session, target));
+        this.elicitation = LazyValue.create(() -> new McpElicitation(session, target));
     }
 
     Context requestContext() {

@@ -31,8 +31,8 @@ public final class McpProgress extends McpFeature {
     private String token;
     private boolean isSending;
 
-    McpProgress(McpSession session, McpTransport transport) {
-        super(session, transport);
+    McpProgress(McpSession session, McpFeatureTarget target) {
+        super(session, target);
         this.session = session;
         this.token = "";
     }
@@ -69,7 +69,7 @@ public final class McpProgress extends McpFeature {
         }
         if (isSending) {
             var notification = session.serializer().progressNotification(this, progress, message);
-            transport().send(notification);
+            send(notification);
         }
         if (progress >= total) {
             isSending = false;

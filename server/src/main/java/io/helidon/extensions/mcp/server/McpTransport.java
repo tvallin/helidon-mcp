@@ -16,7 +16,6 @@
 package io.helidon.extensions.mcp.server;
 
 import java.time.Duration;
-import java.util.Optional;
 
 import io.helidon.json.JsonObject;
 import io.helidon.webserver.jsonrpc.JsonRpcResponse;
@@ -24,7 +23,7 @@ import io.helidon.webserver.jsonrpc.JsonRpcResponse;
 /**
  * MCP transport provides a way to send data to the connected client.
  */
-sealed interface McpTransport permits McpSsePostTransport, McpStreamableHttpTransport, McpTaskTransport {
+sealed interface McpTransport permits McpSsePostTransport, McpStreamableHttpTransport {
     /**
      * Send a JSON object to the client. The payload has to follow
      * the JSON-RPC 2.0 specification.
@@ -54,23 +53,8 @@ sealed interface McpTransport permits McpSsePostTransport, McpStreamableHttpTran
     void unblock();
 
     /**
-     * Notify this transport that a response to an outbound client request was received.
-     */
-    default void clientResponseReceived(long requestId) {
-    }
-
-    /**
      * Close a request-specific transport without closing a shared session transport.
      */
     default void close() {
-    }
-
-    /**
-     * Get the owner of a task transport, if this transport belongs to a task.
-     *
-     * @return task owner, or empty for a request transport
-     */
-    default Optional<McpTaskOwner> taskOwner() {
-        return Optional.empty();
     }
 }

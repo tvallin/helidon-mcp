@@ -31,7 +31,7 @@ public final class McpSubscriptions extends McpFeature {
     private final Map<String, McpTransport> subscriptions;
 
     McpSubscriptions(McpSession session) {
-        super(session, null);
+        super(session);
         this.subscriptions = new ConcurrentHashMap<>();
         this.timeout = session.context()
                 .get(McpServerConfigBlueprint.class, McpServerConfig.class)

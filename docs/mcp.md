@@ -207,7 +207,8 @@ return `-32602` (`Invalid params`).
 For MCP `2025-11-25` sessions, each task is bound to the session ID and to any Helidon Security user or service principals
 present on the creation request. Later operations from a different identity are rejected as if the task did not exist.
 
-Task management is configured globally for all MCP server features under `mcp.server.tasks`. The defaults are:
+Task configuration is shared application-wide by all MCP server features under `mcp.server.tasks`. Each session keeps its
+own task registry, which is cleared when that session is closed or evicted. The defaults are:
 
 ```yaml
 mcp:

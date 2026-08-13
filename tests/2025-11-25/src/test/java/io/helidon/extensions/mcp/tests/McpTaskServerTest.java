@@ -284,21 +284,25 @@ class McpTaskServerTest {
                 .objectValue(RELATED_TASK_META_KEY)
                 .orElseThrow();
         assertThat(relatedTask.stringValue("taskId").orElseThrow(), is(taskId));
-        JsonObject completed = rpc(session, 6, "tasks/get", taskId(taskId));
+        JsonObject replayedResult = rpc(session, 6, "tasks/result", taskId(taskId))
+                .objectValue("result")
+                .orElseThrow();
+        assertThat(replayedResult, is(result));
+        JsonObject completed = rpc(session, 7, "tasks/get", taskId(taskId));
         assertThat(completed.objectValue("result").orElseThrow().stringValue("status").orElseThrow(),
                    is("completed"));
 
         JsonObject errorCreate = rpc(session,
-                                     7,
+                                     8,
                                      "tools/call",
                                      taskCall("error", JsonObject.builder().set("ttl", 60000).build()));
         String errorTaskId = task(errorCreate).stringValue("taskId").orElseThrow();
-        JsonObject errorResult = rpc(session, 8, "tasks/result", taskId(errorTaskId));
+        JsonObject errorResult = rpc(session, 9, "tasks/result", taskId(errorTaskId));
         assertThat(errorResult.objectValue("result").orElseThrow().booleanValue("isError").orElseThrow(), is(true));
-        JsonObject failed = rpc(session, 9, "tasks/get", taskId(errorTaskId));
+        JsonObject failed = rpc(session, 10, "tasks/get", taskId(errorTaskId));
         assertThat(failed.objectValue("result").orElseThrow().stringValue("status").orElseThrow(), is("failed"));
 
-        long nextId = assertReplayedError(session, 10, "exception");
+        long nextId = assertReplayedError(session, 11, "exception");
         nextId = assertReplayedError(session, nextId, "null-exception");
 
         Session other = initialize("/tasks", "2025-11-25").session();

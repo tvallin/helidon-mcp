@@ -31,8 +31,8 @@ public final class McpRoots extends McpFeature {
     private final Duration timeout;
     private final List<McpRoot> roots = new CopyOnWriteArrayList<>();
 
-    McpRoots(McpSession session, McpTransport transport) {
-        super(session, transport);
+    McpRoots(McpSession session, McpFeatureTarget target) {
+        super(session, target);
         this.timeout = session.context()
                 .get(McpServerConfigBlueprint.class, McpServerConfig.class)
                 .map(McpServerConfigBlueprint::rootListTimeout)
@@ -74,9 +74,9 @@ public final class McpRoots extends McpFeature {
     private List<McpRoot> sendListRoot(Duration timeout) {
         long id = session().jsonRpcId();
         JsonObject request = session().serializer().createJsonRpcRequest(id, METHOD_ROOTS_LIST).build();
-        session().prepareResponse(id, transport());
+        prepareResponse(id);
         try {
-            transport().send(request);
+            send(request);
             JsonObject response = session().pollResponse(id, timeout);
             List<McpRoot> updatedRoots = session().serializer().parseRoots(response);
             roots.clear();
@@ -84,8 +84,7 @@ public final class McpRoots extends McpFeature {
             session().context().register(McpRootClassifier.class, false);
             return roots;
         } finally {
-            session().discardResponse(id);
-            transport().clientResponseReceived(id);
+            finishResponse(id);
         }
     }
 

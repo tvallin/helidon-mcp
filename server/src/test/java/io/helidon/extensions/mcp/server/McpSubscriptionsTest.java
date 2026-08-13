@@ -18,6 +18,7 @@ package io.helidon.extensions.mcp.server;
 
 import java.time.Duration;
 
+import io.helidon.common.context.Context;
 import io.helidon.json.JsonParser;
 import io.helidon.json.JsonValue;
 import io.helidon.webserver.http.ServerResponse;
@@ -30,6 +31,7 @@ import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 class McpSubscriptionsTest {
     private static final String RESOURCE_URI = "test://resource";
@@ -41,7 +43,9 @@ class McpSubscriptionsTest {
         McpSession session = session(transport);
         McpSubscriptions subscriptions = session.features().subscriptions();
 
-        session.onRequest(requestId, mock(JsonRpcRequest.class), mock(JsonRpcResponse.class));
+        JsonRpcRequest request = mock(JsonRpcRequest.class);
+        when(request.context()).thenReturn(Context.create());
+        session.onRequest(requestId, request, mock(JsonRpcResponse.class));
         subscriptions.subscribe(requestId, RESOURCE_URI);
         subscriptions.blockSubscribe(RESOURCE_URI);
 
@@ -69,7 +73,10 @@ class McpSubscriptionsTest {
                 .subscriptionTimeout(Duration.ZERO)
                 .buildPrototype();
         McpSessions sessions = new McpSessions(config.maxSessionCount());
-        McpSession session = new McpSession(sessions, new TestTransportManager(transport), config, "test-session");
+        McpSession session = new McpSession(sessions,
+                                            new TestTransportManager(transport),
+                                            config,
+                                            "test-session");
         session.protocolVersion(McpProtocolVersion.VERSION_2025_06_18);
         sessions.put("test-session", session);
         return session;

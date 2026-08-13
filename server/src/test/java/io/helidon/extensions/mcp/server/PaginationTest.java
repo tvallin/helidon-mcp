@@ -137,9 +137,10 @@ class PaginationTest {
 
     @Test
     void testTaskPaginationAcrossSnapshots() {
-        McpTask a = new McpTask("a", new McpTaskOwner("owner"), 1000, 1000);
-        McpTask b = new McpTask("b", new McpTaskOwner("owner"), 1000, 1000);
-        McpTask c = new McpTask("c", new McpTaskOwner("owner"), 1000, 1000);
+        McpTaskOwner owner = new McpTaskOwner(new McpTaskOwner.AuthorizationIdentity(List.of()));
+        McpTask a = new McpTask("a", owner, 1000, 1000);
+        McpTask b = new McpTask("b", owner, 1000, 1000);
+        McpTask c = new McpTask("c", owner, 1000, 1000);
         McpPagination<McpTask> initial = new McpMutablePagination(List.of(a, b, c), 2);
 
         McpPage<McpTask> first = initial.firstPage();
@@ -147,8 +148,8 @@ class PaginationTest {
         assertThat(first.components(), contains(a, b));
         assertThat(first.cursor(), is("b"));
 
-        McpTask aa = new McpTask("aa", new McpTaskOwner("owner"), 1000, 1000);
-        McpTask d = new McpTask("d", new McpTaskOwner("owner"), 1000, 1000);
+        McpTask aa = new McpTask("aa", owner, 1000, 1000);
+        McpTask d = new McpTask("d", owner, 1000, 1000);
         McpPagination<McpTask> changed = new McpMutablePagination(List.of(aa, b, c, d), 2);
         McpPage<McpTask> second = changed.page(first.cursor());
 

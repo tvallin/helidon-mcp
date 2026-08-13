@@ -15,6 +15,7 @@
  */
 package io.helidon.extensions.mcp.server;
 
+import java.util.List;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -34,15 +35,21 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 
 class McpTaskResultWaitersTest {
+    private static final McpTaskOwner TASK_OWNER =
+            new McpTaskOwner(new McpTaskOwner.AuthorizationIdentity(List.of()));
+    private final McpTasksConfig taskConfig = McpTasksConfig.create();
+
     @Test
     void allowsConcurrentWaitersForSameTaskWithinCapacity() {
-        McpTaskResultWaiters waiters = new McpTaskResultWaiters(2);
+        McpTaskMessages taskMessages = new McpTaskMessages();
+        McpTaskResultWaiters waiters = new McpTaskResultWaiters(2, taskMessages);
         McpTask task = new McpTask("task",
-                                   new McpTaskOwner("session"),
-                                   McpTasks.DEFAULT_TTL,
-                                   McpTasks.DEFAULT_POLL_INTERVAL);
+                                   TASK_OWNER,
+                                   taskConfig.defaultTtl().toMillis(),
+                                   taskConfig.pollInterval().toMillis());
         McpTransport firstTransport = mock(McpStreamableHttpTransport.class);
         McpTransport secondTransport = mock(McpStreamableHttpTransport.class);
+        taskMessages.register(task);
         McpTaskResultWaiters.Waiter first = waiters.register(JsonNumber.create(1), task, firstTransport);
         McpTaskResultWaiters.Waiter second = waiters.register(JsonNumber.create(2), task, secondTransport);
 
@@ -56,15 +63,16 @@ class McpTaskResultWaitersTest {
 
     @Test
     void rejectsUnrelatedWaiterBeyondCapacity() {
-        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1);
+        McpTaskMessages taskMessages = new McpTaskMessages();
+        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1, taskMessages);
         McpTask firstTask = new McpTask("first",
-                                        new McpTaskOwner("session"),
-                                        McpTasks.DEFAULT_TTL,
-                                        McpTasks.DEFAULT_POLL_INTERVAL);
+                                        TASK_OWNER,
+                                        taskConfig.defaultTtl().toMillis(),
+                                        taskConfig.pollInterval().toMillis());
         McpTask secondTask = new McpTask("second",
-                                         new McpTaskOwner("session"),
-                                         McpTasks.DEFAULT_TTL,
-                                         McpTasks.DEFAULT_POLL_INTERVAL);
+                                         TASK_OWNER,
+                                         taskConfig.defaultTtl().toMillis(),
+                                         taskConfig.pollInterval().toMillis());
         McpTaskResultWaiters.Waiter first = waiters.register(JsonNumber.create(1),
                                                             firstTask,
                                                             mock(McpStreamableHttpTransport.class));
@@ -79,13 +87,15 @@ class McpTaskResultWaitersTest {
     }
 
     @Test
-    void checksOwnerBeforeAbandoningWaiter() throws InterruptedException {
-        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1);
+    void checksAuthorizationIdentityBeforeAbandoningWaiter() throws InterruptedException {
+        McpTaskMessages taskMessages = new McpTaskMessages();
+        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1, taskMessages);
         McpTask task = new McpTask("owned",
-                                   new McpTaskOwner("session"),
-                                   McpTasks.DEFAULT_TTL,
-                                   McpTasks.DEFAULT_POLL_INTERVAL);
+                                   TASK_OWNER,
+                                   taskConfig.defaultTtl().toMillis(),
+                                   taskConfig.pollInterval().toMillis());
         McpTransport transport = mock(McpStreamableHttpTransport.class);
+        taskMessages.register(task);
         CountDownLatch registered = new CountDownLatch(1);
         CountDownLatch abandoned = new CountDownLatch(1);
         AtomicBoolean interrupted = new AtomicBoolean();
@@ -104,7 +114,9 @@ class McpTaskResultWaitersTest {
         });
         assertThat(registered.await(5, TimeUnit.SECONDS), is(true));
 
-        assertThat(waiters.abandon(JsonNumber.create(1), new McpTaskOwner("other-session")), is(false));
+        var otherOwner = new McpTaskOwner(new McpTaskOwner.AuthorizationIdentity(
+                List.of(new McpTaskOwner.PrincipalIdentity("user", "other"))));
+        assertThat(waiters.abandon(JsonNumber.create(1), otherOwner), is(false));
         assertThat(abandoned.getCount(), is(1L));
         assertThat(waiters.abandon(JsonNumber.create(1), task.owner()), is(true));
 
@@ -116,17 +128,19 @@ class McpTaskResultWaitersTest {
 
     @Test
     void doesNotAttachAbandonedWaiter() {
-        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1);
+        McpTaskMessages taskMessages = new McpTaskMessages();
+        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1, taskMessages);
         McpTask task = new McpTask("abandoned",
-                                   new McpTaskOwner("session"),
-                                   McpTasks.DEFAULT_TTL,
-                                   McpTasks.DEFAULT_POLL_INTERVAL);
+                                   TASK_OWNER,
+                                   taskConfig.defaultTtl().toMillis(),
+                                   taskConfig.pollInterval().toMillis());
         McpStreamableHttpTransport transport = mock(McpStreamableHttpTransport.class);
+        taskMessages.register(task);
         McpTaskResultWaiters.Waiter waiter = waiters.register(JsonNumber.create(1), task, transport);
         waiters.abandon(JsonNumber.create(1), task.owner());
 
         assertThat(waiters.attach(waiter), is(false));
-        task.transport().send(JsonObject.builder()
+        taskMessages.send(task, JsonObject.builder()
                                       .set("jsonrpc", "2.0")
                                       .set("method", "notifications/progress")
                                       .set("params", JsonObject.empty())
@@ -136,18 +150,20 @@ class McpTaskResultWaitersTest {
 
     @Test
     void physicalSendFailureAbandonsWaiter() {
-        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1);
+        McpTaskMessages taskMessages = new McpTaskMessages();
+        McpTaskResultWaiters waiters = new McpTaskResultWaiters(1, taskMessages);
         McpTask task = new McpTask("send-failure",
-                                   new McpTaskOwner("session"),
-                                   McpTasks.DEFAULT_TTL,
-                                   McpTasks.DEFAULT_POLL_INTERVAL);
+                                   TASK_OWNER,
+                                   taskConfig.defaultTtl().toMillis(),
+                                   taskConfig.pollInterval().toMillis());
         McpStreamableHttpTransport transport = mock(McpStreamableHttpTransport.class);
+        taskMessages.register(task);
         McpTaskResultWaiters.Waiter waiter = waiters.register(JsonNumber.create(1), task, transport);
         assertThat(waiters.attach(waiter), is(true));
         doThrow(new IllegalStateException("closed")).when(transport)
                 .send(any(JsonObject.class));
 
-        task.transport().send(JsonObject.builder()
+        taskMessages.send(task, JsonObject.builder()
                                       .set("jsonrpc", "2.0")
                                       .set("method", "notifications/progress")
                                       .set("params", JsonObject.empty())
@@ -161,19 +177,21 @@ class McpTaskResultWaitersTest {
 
     @Test
     void abandoningLatestWaiterRestoresSharedTransport() {
-        McpTaskResultWaiters waiters = new McpTaskResultWaiters(2);
+        McpTaskMessages taskMessages = new McpTaskMessages();
+        McpTaskResultWaiters waiters = new McpTaskResultWaiters(2, taskMessages);
         McpTask task = new McpTask("fallback",
-                                   new McpTaskOwner("session"),
-                                   McpTasks.DEFAULT_TTL,
-                                   McpTasks.DEFAULT_POLL_INTERVAL);
+                                   TASK_OWNER,
+                                   taskConfig.defaultTtl().toMillis(),
+                                   taskConfig.pollInterval().toMillis());
         McpStreamableHttpTransport sharedTransport = mock(McpStreamableHttpTransport.class);
+        taskMessages.register(task);
         McpTaskResultWaiters.Waiter first = waiters.register(JsonNumber.create(1), task, sharedTransport);
         McpTaskResultWaiters.Waiter second = waiters.register(JsonNumber.create(2), task, sharedTransport);
         assertThat(waiters.attach(first), is(true));
         assertThat(waiters.attach(second), is(true));
 
         assertThat(waiters.abandon(JsonNumber.create(2), task.owner()), is(true));
-        task.transport().send(JsonObject.builder()
+        taskMessages.send(task, JsonObject.builder()
                                       .set("jsonrpc", "2.0")
                                       .set("method", "notifications/progress")
                                       .set("params", JsonObject.empty())

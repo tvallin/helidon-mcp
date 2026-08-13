@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2025 Oracle and/or its affiliates.
+ * Copyright (c) 2025, 2026 Oracle and/or its affiliates.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 package io.helidon.extensions.mcp.server;
 
+import io.helidon.json.JsonObject;
+
 /**
  * MCP request feature base class.
  */
@@ -23,21 +25,31 @@ abstract class McpFeature {
      * MCP session to access client information.
      */
     private final McpSession session;
-    /**
-     * MCP transport to access request transport.
-     */
-    private final McpTransport transport;
+    private final McpFeatureTarget target;
 
-    McpFeature(McpSession session, McpTransport transport) {
+    McpFeature(McpSession session) {
         this.session = session;
-        this.transport = transport;
+        this.target = null;
+    }
+
+    McpFeature(McpSession session, McpFeatureTarget target) {
+        this.session = session;
+        this.target = target;
     }
 
     McpSession session() {
         return session;
     }
 
-    McpTransport transport() {
-        return transport;
+    void send(JsonObject message) {
+        session.send(target, message);
+    }
+
+    void prepareResponse(long requestId) {
+        session.prepareResponse(requestId, target);
+    }
+
+    void finishResponse(long requestId) {
+        session.finishResponse(requestId, target);
     }
 }

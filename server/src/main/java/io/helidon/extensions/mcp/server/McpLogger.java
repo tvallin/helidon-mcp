@@ -27,8 +27,8 @@ public final class McpLogger extends McpFeature {
     private final String name;
     private final McpSession session;
 
-    McpLogger(McpSession session, McpTransport transport) {
-        super(session, transport);
+    McpLogger(McpSession session, McpFeatureTarget target) {
+        super(session, target);
         this.session = session;
         this.name = "helidon-logger";
     }
@@ -64,7 +64,7 @@ public final class McpLogger extends McpFeature {
     private void sendNotification(Level level, Object data) {
         if (level.ordinal() >= level().ordinal()) {
             var notification = session.serializer().createLoggingNotification(level, name, data);
-            transport().send(notification);
+            send(notification);
         }
     }
 

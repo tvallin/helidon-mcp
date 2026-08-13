@@ -39,8 +39,8 @@ public final class McpSampling extends McpFeature {
     private final int maxToolIterations;
     private final List<McpTool> registeredTools;
 
-    McpSampling(McpSession session, McpTransport transport, McpFeatures features) {
-        super(session, transport);
+    McpSampling(McpSession session, McpFeatureTarget target, McpFeatures features) {
+        super(session, target);
         this.features = features;
         this.enabled = session.capabilities().contains(McpCapability.SAMPLING);
         this.enabledContext = session.capabilities().contains(McpCapability.SAMPLING_CONTEXT);
@@ -160,10 +160,10 @@ public final class McpSampling extends McpFeature {
             checkRequestActive();
             long id = session().jsonRpcId();
             JsonObject payload = session().serializer().createSamplingRequest(id, currentRequest, toolDefinitions);
-            session().prepareResponse(id, transport());
+            prepareResponse(id);
             McpSamplingResponse response;
             try {
-                transport().send(payload);
+                send(payload);
                 JsonObject jsonResponse = session().pollResponse(id, currentRequest.timeout());
                 response = session().serializer().createSamplingResponse(jsonResponse);
             } finally {
@@ -265,8 +265,7 @@ public final class McpSampling extends McpFeature {
     }
 
     private void finishRequest(long requestId) {
-        session().discardResponse(requestId);
-        transport().clientResponseReceived(requestId);
+        finishResponse(requestId);
     }
 
     private McpToolResult createToolErrorResult(String message) {
