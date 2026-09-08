@@ -23,7 +23,7 @@
     <parent>
         <groupId>io.helidon.applications</groupId>
         <artifactId>helidon-se</artifactId>
-        <version>4.5.0</version>
+        <version>27.0.0-M1</version>
         <relativePath/>
     </parent>
 
@@ -34,7 +34,20 @@
 
     <properties>
         <mainClass>io.helidon.extensions.mcp.weather.server.client.Main</mainClass>
+        <version.lib.langchain4j>1.15.1</version.lib.langchain4j>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>dev.langchain4j</groupId>
+                <artifactId>langchain4j-bom</artifactId>
+                <version>${version.lib.langchain4j}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <dependency>

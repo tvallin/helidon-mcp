@@ -36,6 +36,7 @@
         <module>calendar</module>
         <module>calendar-stateless</module>
         <module>calendar-declarative</module>
-        <module>calendar-microprofile</module>
+        <!-- The MicroProfile example is excluded because Helidon 27.0.0-M1 does not include MicroProfile. -->
+        <!--module>calendar-microprofile<module-->
     </modules>
 </project>

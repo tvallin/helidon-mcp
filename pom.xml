@@ -59,8 +59,8 @@
     </developers>
 
     <properties>
-        <version.java>21</version.java>
-        <helidon.version>4.5.0</helidon.version>
+        <version.java>26</version.java>
+        <helidon.version>27.0.0-M1</helidon.version>
 
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
@@ -71,7 +71,7 @@
         <failsafe.coverage.argline />
         <checkstyle.skip>false</checkstyle.skip>
 
-        <version.lib.asm>9.8</version.lib.asm>
+        <version.lib.asm>9.10.1</version.lib.asm>
         <version.lib.checkstyle>10.12.5</version.lib.checkstyle>
         <version.lib.langchain4j.mcp>1.15.1-beta25</version.lib.langchain4j.mcp>
         <version.lib.langchain4j>1.15.1</version.lib.langchain4j>
@@ -93,7 +93,7 @@
         <version.plugin.resources>3.3.1</version.plugin.resources>
         <version.plugin.source>3.3.1</version.plugin.source>
         <version.plugin.surefire>3.5.3</version.plugin.surefire>
-        <version.plugin.spotbugs>4.9.3.2</version.plugin.spotbugs>
+        <version.plugin.spotbugs>4.9.8.2</version.plugin.spotbugs>
         <version.pluging.services>4.0.16</version.pluging.services>
     </properties>
 
