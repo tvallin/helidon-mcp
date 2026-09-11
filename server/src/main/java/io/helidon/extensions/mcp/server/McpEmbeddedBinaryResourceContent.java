@@ -17,12 +17,16 @@ package io.helidon.extensions.mcp.server;
 
 import java.util.Base64;
 
+import io.helidon.builder.api.Option;
+
 interface McpEmbeddedBinaryResourceContent extends McpEmbeddedResourceContent {
     /**
      * Resource content.
+     * The raw payload is masked in generated {@code toString()} output.
      *
      * @return content
      */
+    @Option.Confidential
     byte[] data();
 
     default String base64Data() {
