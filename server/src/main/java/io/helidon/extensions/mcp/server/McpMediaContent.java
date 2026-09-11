@@ -17,14 +17,17 @@ package io.helidon.extensions.mcp.server;
 
 import java.util.Base64;
 
+import io.helidon.builder.api.Option;
 import io.helidon.common.media.type.MediaType;
 
 interface McpMediaContent extends McpContent {
     /**
      * Image content data.
+     * The raw payload is masked in generated {@code toString()} output.
      *
      * @return content
      */
+    @Option.Confidential
     byte[] data();
 
     /**

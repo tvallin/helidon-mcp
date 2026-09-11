@@ -17,6 +17,7 @@ package io.helidon.extensions.mcp.server;
 
 import java.util.Base64;
 
+import io.helidon.builder.api.Option;
 import io.helidon.common.media.type.MediaType;
 
 /**
@@ -25,9 +26,11 @@ import io.helidon.common.media.type.MediaType;
 public interface McpSamplingMediaContent extends McpSamplingAnnotatedContent {
     /**
      * Media content raw data.
+     * The raw payload is masked in generated {@code toString()} output.
      *
      * @return content
      */
+    @Option.Confidential
     byte[] data();
 
     /**
