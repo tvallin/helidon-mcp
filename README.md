@@ -5,7 +5,7 @@ Helidon support for [Model Context Protocol](https://modelcontextprotocol.io/).
 
 ## Getting Started
 
-Helidon MCP requires Java 26 or newer and uses Helidon `27.0.0-M1`.
+Helidon MCP requires Java 27 or newer and uses Helidon `27.0.0`.
 
 To get started, read the documentation that explains what is Helidon MCP support related to. Then the
 examples are a good starting point to run your first Helidon MCP server whether you use SE or Declarative.

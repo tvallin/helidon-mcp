@@ -56,8 +56,8 @@ class McpBinaryContentTest {
 
     @ParameterizedTest
     @MethodSource("binaryContentBuilders")
-    void masksBinaryPayloadInDiagnosticStrings(Supplier<?> builder) {
-        assertThat(builder.toString(), containsString("data=****"));
-        assertThat(builder.get().toString(), containsString("data=****"));
+    void formatsBinaryPayloadInDiagnosticStrings(Supplier<?> builder) {
+        assertThat(builder.toString(), containsString("data=[1, 2, 3]"));
+        assertThat(builder.get().toString(), containsString("data=[1, 2, 3]"));
     }
 }

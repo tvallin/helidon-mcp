@@ -21,7 +21,7 @@ on:
       - 'release-*'
 
 env:
-  JAVA_VERSION: 26
+  JAVA_VERSION: 27
   JAVA_DISTRO: oracle
   MVN_ARGS: |
     -B -e

@@ -17,7 +17,6 @@ package io.helidon.extensions.mcp.server;
 
 import java.util.Base64;
 
-import io.helidon.builder.api.Option;
 import io.helidon.builder.api.Prototype;
 
 /**
@@ -28,11 +27,9 @@ interface McpResourceBinaryContentBlueprint extends McpResourceContent {
 
     /**
      * Resource content.
-     * The raw payload is masked in generated {@code toString()} output.
      *
      * @return content
      */
-    @Option.Confidential
     byte[] data();
 
     /**
