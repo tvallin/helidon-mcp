@@ -20,6 +20,7 @@ import java.util.List;
 import java.util.Optional;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 
 import io.helidon.codegen.CodegenException;
 import io.helidon.codegen.classmodel.ClassModel;
@@ -32,6 +33,8 @@ import io.helidon.common.types.AccessModifier;
 import io.helidon.common.types.Annotated;
 import io.helidon.common.types.Annotation;
 import io.helidon.common.types.Annotations;
+import io.helidon.common.types.ElementKind;
+import io.helidon.common.types.Modifier;
 import io.helidon.common.types.ResolvedType;
 import io.helidon.common.types.TypeInfo;
 import io.helidon.common.types.TypeName;
@@ -41,6 +44,8 @@ import io.helidon.common.types.TypedElementInfo;
 import static io.helidon.common.types.TypeNames.LIST;
 import static io.helidon.extensions.mcp.codegen.McpTypes.HELIDON_MEDIA_TYPES;
 import static io.helidon.extensions.mcp.codegen.McpTypes.LIST_MCP_ICON;
+import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_CANCELLABLE;
+import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_CANCELLABLE_INTERFACE;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_CANCELLATION;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_COMPLETION_REQUEST;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_DESCRIPTION;
@@ -247,6 +252,33 @@ class McpCodegenUtil {
             return description.stringValue();
         }
         return Optional.empty();
+    }
+
+    static void addCancellation(InnerClass.Builder builder, TypeInfo server, TypedElementInfo component) {
+        var annotation = component.findAnnotation(MCP_CANCELLABLE);
+        if (annotation.isEmpty()) {
+            return;
+        }
+        String name = annotation.get().value().orElse("");
+        boolean valid = Stream.concat(server.elementInfo().stream(), server.otherElementInfo().stream())
+                .filter(method -> method.kind() == ElementKind.METHOD && method.elementName().equals(name))
+                .anyMatch(method -> method.accessModifier() != AccessModifier.PRIVATE
+                        && !method.elementModifiers().contains(Modifier.STATIC)
+                        && TypeNames.PRIMITIVE_VOID.equals(method.typeName())
+                        && method.parameterArguments().size() == 1
+                        && MCP_REQUEST.equals(method.parameterArguments().getFirst().typeName())
+                        && method.throwsChecked().isEmpty());
+        if (!valid) {
+            throw new CodegenException("@Mcp.Cancellable on " + component.elementName()
+                                               + " requires an accessible instance method void " + name
+                                               + "(McpRequest) without checked exceptions on " + server.typeName().fqName(),
+                                       component.originatingElementValue());
+        }
+        builder.addInterface(MCP_CANCELLABLE_INTERFACE)
+                .addMethod(method -> method.name("cancel")
+                        .addAnnotation(Annotations.OVERRIDE)
+                        .addParameter(param -> param.type(MCP_REQUEST).name("request"))
+                        .addContentLine("delegate." + name + "(request);"));
     }
 
     static void addIcons(InnerClass.Builder builder, Annotated component) {

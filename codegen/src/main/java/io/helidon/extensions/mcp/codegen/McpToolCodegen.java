@@ -33,6 +33,7 @@ import io.helidon.common.types.TypeName;
 import io.helidon.common.types.TypeNames;
 import io.helidon.common.types.TypedElementInfo;
 
+import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addCancellation;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addIcons;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addToListMethod;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.createClassName;
@@ -75,6 +76,7 @@ class McpToolCodegen {
             classModel.addInnerClass(clazz -> clazz
                     .name(innerToolName.className())
                     .addInterface(MCP_TOOL_INTERFACE)
+                    .update(component -> addCancellation(component, type, element))
                     .accessModifier(AccessModifier.PRIVATE)
                     .addMethod(method -> addToolNameMethod(method, element))
                     .addMethod(method -> addToolDescriptionMethod(method, description))

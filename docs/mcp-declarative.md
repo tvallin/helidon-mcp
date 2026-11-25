@@ -689,6 +689,24 @@ class Server {
 
 ### Cancellation
 
+Add `@Mcp.Cancellable("handlerName")` to a tool, prompt, resource, completion, resource subscriber,
+or resource unsubscriber method to receive cancellation for that invocation. Declare the named
+handler on the same server as an accessible instance method returning `void` and taking one
+`McpRequest`. It must declare no checked exceptions. The generated component registers the handler
+before the annotated method starts. Both receive the same request object.
+
+```java
+@Mcp.Tool("Generate a report")
+@Mcp.Cancellable("cancelReport")
+McpToolResult generateReport(McpRequest request) {
+    return reports.generate(request);
+}
+
+void cancelReport(McpRequest request) {
+    reports.cancelInvocation(request);
+}
+```
+
 The MCP Cancellation feature enables verification of whether a client has issued a cancellation request. Such requests are
 typically made when a process is taking an extended amount of time, and the client opts not to wait for the completion of
 the operation. Cancellation status can be accessed from the `McpFeatures` class or directly as method parameter.

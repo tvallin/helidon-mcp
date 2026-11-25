@@ -19,21 +19,55 @@ import java.io.IOException;
 import java.io.StringWriter;
 import java.util.List;
 
+import io.helidon.codegen.CodegenException;
 import io.helidon.codegen.classmodel.ClassModel;
+import io.helidon.codegen.classmodel.InnerClass;
 import io.helidon.common.types.Annotated;
 import io.helidon.common.types.Annotation;
+import io.helidon.common.types.ElementKind;
+import io.helidon.common.types.TypeInfo;
+import io.helidon.common.types.TypeName;
+import io.helidon.common.types.TypeNames;
+import io.helidon.common.types.TypedElementInfo;
 import io.helidon.extensions.mcp.server.McpIcons;
 
 import org.junit.jupiter.api.Test;
 
+import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addCancellation;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addIcons;
+import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_CANCELLABLE;
 import static io.helidon.extensions.mcp.codegen.McpTypes.MCP_ICON_ANNOTATION;
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.containsString;
 import static org.hamcrest.Matchers.lessThan;
 import static org.hamcrest.Matchers.not;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 class McpCodegenUtilTest {
+    @Test
+    void rejectsCancellationHandlerWithWrongParameters() {
+        var tool = TypedElementInfo.builder()
+                .kind(ElementKind.METHOD)
+                .typeName(TypeNames.STRING)
+                .elementName("report")
+                .addAnnotation(Annotation.create(MCP_CANCELLABLE, "cancelReport"))
+                .build();
+        var server = TypeInfo.builder()
+                .kind(ElementKind.CLASS)
+                .typeName(TypeName.create("example.ReportServer"))
+                .addElementInfo(tool)
+                .addElementInfo(TypedElementInfo.builder()
+                                        .kind(ElementKind.METHOD)
+                                        .typeName(TypeNames.PRIMITIVE_VOID)
+                                        .elementName("cancelReport")
+                                        .build())
+                .build();
+
+        var exception = assertThrows(CodegenException.class, () -> addCancellation(InnerClass.builder(), server, tool));
+
+        assertThat(exception.getMessage(), containsString("void cancelReport(McpRequest)"));
+    }
+
     @Test
     void cachesGeneratedIcons() throws IOException {
         String source = render(Annotation.create(MCP_ICON_ANNOTATION, "https://example.com/icon.svg"));

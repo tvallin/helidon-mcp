@@ -31,6 +31,7 @@ final class McpTypes {
     static final TypeName MCP_PATH = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Path");
     static final TypeName MCP_ROLE = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Role");
     static final TypeName MCP_TOOL = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Tool");
+    static final TypeName MCP_CANCELLABLE = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Cancellable");
     static final TypeName MCP_SERVER = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Server");
     static final TypeName MCP_ICON_ANNOTATION = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Icon");
     static final TypeName MCP_ICONS = TypeName.create("io.helidon.extensions.mcp.server.Mcp.Icons");
@@ -70,6 +71,7 @@ final class McpTypes {
     static final TypeName MCP_PROMPT_INTERFACE = TypeName.create("io.helidon.extensions.mcp.server.McpPrompt");
     static final TypeName MCP_TOOL_REQUEST = TypeName.create("io.helidon.extensions.mcp.server.McpToolRequest");
     static final TypeName MCP_CANCELLATION = TypeName.create("io.helidon.extensions.mcp.server.McpCancellation");
+    static final TypeName MCP_CANCELLABLE_INTERFACE = TypeName.create("io.helidon.extensions.mcp.server.McpCancellable");
     static final TypeName MCP_SERVER_CONFIG = TypeName.create("io.helidon.extensions.mcp.server.McpServerConfig");
     static final TypeName MCP_PROMPT_RESULT = TypeName.create("io.helidon.extensions.mcp.server.McpPromptResult");
     static final TypeName MCP_RESOURCE_INTERFACE = TypeName.create("io.helidon.extensions.mcp.server.McpResource");

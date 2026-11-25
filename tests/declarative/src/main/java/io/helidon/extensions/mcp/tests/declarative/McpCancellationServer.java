@@ -16,6 +16,9 @@
 
 package io.helidon.extensions.mcp.tests.declarative;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
 import io.helidon.common.media.type.MediaTypes;
 import io.helidon.extensions.mcp.server.Mcp;
 import io.helidon.extensions.mcp.server.McpCancellation;
@@ -29,6 +32,19 @@ import io.helidon.extensions.mcp.server.McpToolResult;
 @Mcp.Path("/cancellation")
 class McpCancellationServer {
     private static final String NO_CANCELLATION_REQUESTED = "No cancellation requested";
+
+    @Mcp.Tool("Wait for cancellation")
+    @Mcp.Cancellable("cancelWait")
+    String waitForCancellation(McpRequest request) {
+        var result = new CancellationSignal();
+        request.requestContext().register(result);
+        request.features().progress().send(0, "Waiting for cancellation");
+        return result.cancelled.orTimeout(10, TimeUnit.SECONDS).join() == request ? "same request" : "different request";
+    }
+
+    void cancelWait(McpRequest request) {
+        request.requestContext().get(CancellationSignal.class).orElseThrow().cancelled.complete(request);
+    }
 
     @Mcp.Tool("Cancellation Tool")
     McpToolResult cancellationTool(McpCancellation cancellation) {
@@ -68,5 +84,9 @@ class McpCancellationServer {
                   description = "Cancellation Resource")
     String cancellationResource1(McpRequest request, McpCancellation cancellation, McpLogger logger) {
         return request.features().cancellation().result().reason().orElse(NO_CANCELLATION_REQUESTED);
+    }
+
+    private static class CancellationSignal {
+        private final CompletableFuture<McpRequest> cancelled = new CompletableFuture<>();
     }
 }

@@ -30,6 +30,7 @@ import io.helidon.common.types.TypeNames;
 import io.helidon.common.types.TypedElementInfo;
 
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.MCP_TYPES;
+import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addCancellation;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addIcons;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.createClassName;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.getElementsWithAnnotation;
@@ -63,6 +64,7 @@ class McpPromptCodegen {
             classModel.addInnerClass(clazz -> clazz
                     .name(innerTypeName.className())
                     .addInterface(MCP_PROMPT_INTERFACE)
+                    .update(component -> addCancellation(component, type, element))
                     .accessModifier(AccessModifier.PRIVATE)
                     .addMethod(method -> addPromptNameMethod(method, element))
                     .addMethod(method -> addPromptDescriptionMethod(method, description))

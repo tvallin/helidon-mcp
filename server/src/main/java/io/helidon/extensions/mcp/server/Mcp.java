@@ -232,6 +232,23 @@ public final class Mcp {
     }
 
     /**
+     * Associates a tool, prompt, resource, completion, subscriber, or unsubscriber method with its cancellation handler.
+     * The server registers the handler before invoking the annotated method.
+     */
+    @Target(METHOD)
+    @Retention(CLASS)
+    public @interface Cancellable {
+        /**
+         * Name of an accessible instance method declared on this server. The handler must return {@code void},
+         * accept one {@link McpRequest}, and declare no checked exceptions. It receives the request for the
+         * invocation being cancelled.
+         *
+         * @return cancellation handler method name
+         */
+        String value();
+    }
+
+    /**
      * Annotation to define an MCP Tool.
      * A tool is a none static method and must be located in a class annotated with
      * {@link io.helidon.extensions.mcp.server.Mcp.Server}. This way, the tool is

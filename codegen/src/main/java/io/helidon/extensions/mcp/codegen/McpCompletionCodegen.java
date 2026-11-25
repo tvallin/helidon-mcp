@@ -31,6 +31,7 @@ import io.helidon.common.types.TypeNames;
 import io.helidon.common.types.TypedElementInfo;
 
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.MCP_TYPES;
+import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.addCancellation;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.createClassName;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.getElementsWithAnnotation;
 import static io.helidon.extensions.mcp.codegen.McpCodegenUtil.isMcpType;
@@ -59,6 +60,7 @@ class McpCompletionCodegen {
             classModel.addInnerClass(clazz -> clazz
                     .name(innerTypeName.className())
                     .addInterface(MCP_COMPLETION_INTERFACE)
+                    .update(component -> addCancellation(component, type, element))
                     .accessModifier(AccessModifier.PRIVATE)
                     .addMethod(method -> addCompletionReferenceMethod(method, reference))
                     .addMethod(method -> addCompletionReferenceTypeMethod(method, referenceType))
