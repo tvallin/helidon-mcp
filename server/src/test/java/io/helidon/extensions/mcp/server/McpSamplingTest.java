@@ -481,6 +481,39 @@ class McpSamplingTest {
     }
 
     @Test
+    void cancellationTargetsOnlyTheActiveSamplingToolInvocation() {
+        CancellableTool tool = mock(CancellableTool.class);
+        when(tool.name()).thenReturn("tool");
+        when(tool.description()).thenReturn("Cancellable tool");
+        when(tool.schema()).thenReturn("");
+        when(tool.tool(any())).thenReturn(McpToolResult.create("first")).thenAnswer(invocation -> {
+            McpToolRequest request = invocation.getArgument(0);
+            request.features().cancellation().cancel(JsonNull.instance());
+            return McpToolResult.create("second");
+        });
+        McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, """
+                {"sampling": {"tools": {}}}
+                """, tool);
+        acceptSamplingResponse(session, 0, """
+                [
+                  {"type": "tool_use", "id": "call-1", "name": "tool", "input": {}},
+                  {"type": "tool_use", "id": "call-2", "name": "tool", "input": {}}
+                ]
+                """, "toolUse");
+        JsonRpcResponse response = mock(JsonRpcResponse.class);
+        when(response.sink(SseSink.TYPE)).thenReturn(mock(SseSink.class));
+        McpSampling sampling = sampling(session, new McpStreamableHttpTransport(response));
+
+        assertThrows(McpSamplingException.class, () -> sampling.request(req -> req.addTool(tool.name())));
+
+        var calls = ArgumentCaptor.forClass(McpToolRequest.class);
+        verify(tool, times(2)).tool(calls.capture());
+        var cancelled = ArgumentCaptor.forClass(McpRequest.class);
+        verify(tool).cancel(cancelled.capture());
+        assertThat(cancelled.getValue(), sameInstance(calls.getAllValues().getLast()));
+    }
+
+    @Test
     void retainsParentCancellationHookWhenSamplingToolRegistersAnother() {
         AtomicInteger parentCancellations = new AtomicInteger();
         AtomicInteger toolCancellations = new AtomicInteger();
@@ -1441,6 +1474,9 @@ class McpSamplingTest {
                 .role(role)
                 .addContent(content)
                 .build();
+    }
+
+    private interface CancellableTool extends McpTool, McpCancellable {
     }
 
     private record TestTool(String name,

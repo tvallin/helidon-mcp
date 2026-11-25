@@ -42,6 +42,16 @@ public final class McpCancellation {
         result = new McpCancellationResultImpl(false);
     }
 
+    static Registration register(Object component, McpRequest request) {
+        if (component instanceof McpCancellable cancellable) {
+            McpCancellation cancellation = request.features().cancellation();
+            Runnable hook = () -> cancellable.cancel(request);
+            cancellation.registerHook(hook);
+            return () -> cancellation.unregisterCancellationHook(hook);
+        }
+        return () -> { };
+    }
+
     /**
      * Check whether a cancellation request was made.
      *
@@ -57,8 +67,14 @@ public final class McpCancellation {
      *
      * @param hook cancellation hook
      * @throws NullPointerException if the hook is {@code null}
+     * @deprecated Implement {@link McpCancellable} on the component to let the server register the callback.
      */
+    @Deprecated(since = "27.0.0")
     public void registerCancellationHook(Runnable hook) {
+        registerHook(hook);
+    }
+
+    void registerHook(Runnable hook) {
         Objects.requireNonNull(hook, "hook is null");
         boolean runNow;
         lock.lock();
@@ -133,5 +149,10 @@ public final class McpCancellation {
         } catch (RuntimeException e) {
             LOGGER.log(Level.WARNING, "Cancellation hook failed", e);
         }
+    }
+
+    interface Registration extends AutoCloseable {
+        @Override
+        void close();
     }
 }

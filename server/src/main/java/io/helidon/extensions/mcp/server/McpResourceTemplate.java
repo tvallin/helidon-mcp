@@ -76,6 +76,10 @@ class McpResourceTemplate implements McpResource {
         return pattern.get().matcher(uri).matches();
     }
 
+    McpResource delegate() {
+        return delegate;
+    }
+
     McpParameters parameters(JsonRpcParams params, String uri) {
         JsonObject.Builder builder = JsonObject.builder();
         Matcher matcher = pattern.get().matcher(uri);

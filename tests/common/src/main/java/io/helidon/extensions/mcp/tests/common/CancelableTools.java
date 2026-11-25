@@ -18,8 +18,10 @@ package io.helidon.extensions.mcp.tests.common;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
+import io.helidon.extensions.mcp.server.McpCancellable;
 import io.helidon.extensions.mcp.server.McpCancellation;
 import io.helidon.extensions.mcp.server.McpCancellationResult;
+import io.helidon.extensions.mcp.server.McpRequest;
 import io.helidon.extensions.mcp.server.McpServerFeature;
 import io.helidon.extensions.mcp.server.McpTool;
 import io.helidon.extensions.mcp.server.McpToolRequest;
@@ -99,7 +101,7 @@ public class CancelableTools {
         }
     }
 
-    private static class CancellationHookTool implements McpTool {
+    private static class CancellationHookTool implements McpTool, McpCancellable {
         private final CountDownLatch latch;
 
         CancellationHookTool(CountDownLatch latch) {
@@ -123,8 +125,6 @@ public class CancelableTools {
 
         @Override
         public McpToolResult tool(McpToolRequest request) {
-            McpCancellation cancellation = request.features().cancellation();
-            cancellation.registerCancellationHook(latch::countDown);
             try {
                 TimeUnit.SECONDS.sleep(3);
             } catch (InterruptedException e) {
@@ -133,6 +133,11 @@ public class CancelableTools {
             return McpToolResult.builder()
                     .addTextContent("Failed")
                     .build();
+        }
+
+        @Override
+        public void cancel(McpRequest request) {
+            latch.countDown();
         }
     }
 }

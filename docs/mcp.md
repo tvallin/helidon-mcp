@@ -993,6 +993,12 @@ The API returns a `McpCancellationResult` which contains:
 - `isRequested()` – whether cancellation was requested
 - `reason()` – optional cancellation reason provided by the client
 
+To receive a callback, implement `McpCancellable` alongside your component interface, for example
+`McpTool`. The server registers `cancel(McpRequest)` before invoking the component. The callback
+receives the same request object as the invocation, so a component serving concurrent calls can
+identify which work to stop. Read the reason from `request.features().cancellation().result().reason()`.
+New code should use this interface in place of the deprecated `registerCancellationHook(Runnable)` method.
+
 #### Example
 
 Example of a Tool checking for cancellation request.

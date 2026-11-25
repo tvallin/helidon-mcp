@@ -231,8 +231,9 @@ public final class McpSampling extends McpFeature {
                             .sessionContext(session().context())
                             .requestContext(mcpResponse.requestContext())
                             .build();
-                    try {
-                        toolResult = tool.tool(new McpToolRequestImpl(toolRequest));
+                    var requestToTool = new McpToolRequestImpl(toolRequest);
+                    try (var _ = McpCancellation.register(tool, requestToTool)) {
+                        toolResult = tool.tool(requestToTool);
                     } catch (RuntimeException e) {
                         LOGGER.log(System.Logger.Level.TRACE, "Sampling tool execution failed: "
                                 + toolUse.name(), e);
@@ -267,7 +268,7 @@ public final class McpSampling extends McpFeature {
                 .abortResponse(id, new McpSamplingException(CANCELLATION_MESSAGE));
         try {
             session().prepareResponse(id);
-            cancellation.registerCancellationHook(cancellationHook);
+            cancellation.registerHook(cancellationHook);
             checkRequestActive();
             transport().send(payload);
             return session().pollResponse(id, request.timeout())

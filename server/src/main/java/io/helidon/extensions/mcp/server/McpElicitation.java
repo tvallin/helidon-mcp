@@ -131,7 +131,7 @@ public final class McpElicitation extends McpFeature {
                 .abortResponse(id, new McpElicitationException(CANCELLATION_MESSAGE));
         try {
             session().prepareResponse(id);
-            cancellation.registerCancellationHook(cancellationHook);
+            cancellation.registerHook(cancellationHook);
             if (session().state() == McpSession.State.DISCONNECTED) {
                 throw new McpInternalException("Session disconnected");
             }
