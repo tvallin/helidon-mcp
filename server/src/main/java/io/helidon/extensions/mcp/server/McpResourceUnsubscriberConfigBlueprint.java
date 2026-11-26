@@ -24,7 +24,7 @@ import io.helidon.builder.api.Prototype;
  * Configuration of an MCP Resource Unsubscriber.
  */
 @Prototype.Blueprint
-@Prototype.IncludeDefaultMethods("cancel")
+@Prototype.IncludeDefaultMethods("onCancel")
 interface McpResourceUnsubscriberConfigBlueprint extends Prototype.Factory<McpResourceUnsubscriber>, McpCancellationConfig {
     /**
      * Handle cancellation of a resource unsubscription request. The handler receives the same request as the component.
@@ -32,7 +32,7 @@ interface McpResourceUnsubscriberConfigBlueprint extends Prototype.Factory<McpRe
      * @return the cancellation handler, if configured
      */
     @Override
-    default Optional<McpCancellable> cancel() {
+    default Optional<McpCancellable> onCancel() {
         return Optional.empty();
     }
 

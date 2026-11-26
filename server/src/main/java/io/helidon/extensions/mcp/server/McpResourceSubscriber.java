@@ -72,7 +72,7 @@ public interface McpResourceSubscriber extends RuntimeType.Api<McpResourceSubscr
                 .uri(uri())
                 .subscribe(this::subscribe);
         if (this instanceof McpCancellable cancellable) {
-            builder.cancel(cancellable);
+            builder.onCancel(cancellable);
         }
         return builder.buildPrototype();
     }

@@ -27,7 +27,7 @@ import io.helidon.common.media.type.MediaType;
  * Resource configuration.
  */
 @Prototype.Blueprint
-@Prototype.IncludeDefaultMethods("cancel")
+@Prototype.IncludeDefaultMethods("onCancel")
 interface McpResourceConfigBlueprint extends McpCancellationConfig {
     /**
      * Handle cancellation of a resource request. The handler receives the same request as the component.
@@ -35,7 +35,7 @@ interface McpResourceConfigBlueprint extends McpCancellationConfig {
      * @return the cancellation handler, if configured
      */
     @Override
-    default Optional<McpCancellable> cancel() {
+    default Optional<McpCancellable> onCancel() {
         return Optional.empty();
     }
 

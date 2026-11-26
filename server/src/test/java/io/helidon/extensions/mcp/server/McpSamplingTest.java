@@ -496,7 +496,7 @@ class McpSamplingTest {
         var server = McpServerFeature.builder();
         if (useBuilder) {
             server.addTool(builder -> builder.name(tool.name()).description(tool.description()).schema(tool.schema())
-                    .tool(tool::tool).cancel(tool::cancel));
+                    .tool(tool::tool).onCancel(tool::onCancel));
         } else {
             server.addTool(tool);
         }
@@ -518,7 +518,7 @@ class McpSamplingTest {
         var calls = ArgumentCaptor.forClass(McpToolRequest.class);
         verify(tool, times(2)).tool(calls.capture());
         var cancelled = ArgumentCaptor.forClass(McpRequest.class);
-        verify(tool).cancel(cancelled.capture());
+        verify(tool).onCancel(cancelled.capture());
         assertThat(cancelled.getValue(), sameInstance(calls.getAllValues().getLast()));
     }
 

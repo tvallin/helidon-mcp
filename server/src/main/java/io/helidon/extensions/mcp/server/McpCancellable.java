@@ -28,5 +28,5 @@ public interface McpCancellable {
      *
      * @param request request being cancelled
      */
-    void cancel(McpRequest request);
+    void onCancel(McpRequest request);
 }

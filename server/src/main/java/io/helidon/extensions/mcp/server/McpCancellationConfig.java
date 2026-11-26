@@ -27,5 +27,5 @@ interface McpCancellationConfig {
      *
      * @return the cancellation handler, if configured
      */
-    Optional<McpCancellable> cancel();
+    Optional<McpCancellable> onCancel();
 }

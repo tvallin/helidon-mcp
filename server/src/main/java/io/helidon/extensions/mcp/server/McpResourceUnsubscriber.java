@@ -72,7 +72,7 @@ public interface McpResourceUnsubscriber extends RuntimeType.Api<McpResourceUnsu
                 .uri(uri())
                 .unsubscribe(this::unsubscribe);
         if (this instanceof McpCancellable cancellable) {
-            builder.cancel(cancellable);
+            builder.onCancel(cancellable);
         }
         return builder.buildPrototype();
     }

@@ -25,7 +25,7 @@ import io.helidon.builder.api.Prototype;
  * Completion configuration.
  */
 @Prototype.Blueprint
-@Prototype.IncludeDefaultMethods("cancel")
+@Prototype.IncludeDefaultMethods("onCancel")
 interface McpCompletionConfigBlueprint extends McpCancellationConfig {
     /**
      * Handle cancellation of a completion request. The handler receives the same request as the component.
@@ -33,7 +33,7 @@ interface McpCompletionConfigBlueprint extends McpCancellationConfig {
      * @return the cancellation handler, if configured
      */
     @Override
-    default Optional<McpCancellable> cancel() {
+    default Optional<McpCancellable> onCancel() {
         return Optional.empty();
     }
 

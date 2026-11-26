@@ -275,7 +275,7 @@ class McpCodegenUtil {
                                        component.originatingElementValue());
         }
         builder.addInterface(MCP_CANCELLABLE_INTERFACE)
-                .addMethod(method -> method.name("cancel")
+                .addMethod(method -> method.name("onCancel")
                         .addAnnotation(Annotations.OVERRIDE)
                         .addParameter(param -> param.type(MCP_REQUEST).name("request"))
                         .addContentLine("delegate." + name + "(request);"));

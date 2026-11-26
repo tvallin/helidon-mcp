@@ -136,7 +136,7 @@ public class CancelableTools {
         }
 
         @Override
-        public void cancel(McpRequest request) {
+        public void onCancel(McpRequest request) {
             latch.countDown();
         }
     }

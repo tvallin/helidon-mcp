@@ -994,12 +994,12 @@ The API returns a `McpCancellationResult` which contains:
 - `reason()` – optional cancellation reason provided by the client
 
 To receive a callback, implement `McpCancellable` alongside your component interface, for example
-`McpTool`. The server registers `cancel(McpRequest)` before invoking the component. The callback
+`McpTool`. The server registers `onCancel(McpRequest)` before invoking the component. The callback
 receives the same request object as the invocation, so a component serving concurrent calls can
 identify which work to stop. Read the reason from `request.features().cancellation().result().reason()`.
 New code should use this interface in place of the deprecated `registerCancellationHook(Runnable)` method.
 
-When building a component, pass its cancellation handler to `cancel(McpCancellable)`. For example,
+When building a component, pass its cancellation handler to `onCancel(McpCancellable)`. For example,
 this tool passes the same request to the report service for generation and cancellation.
 
 ```java
@@ -1007,7 +1007,7 @@ builder.addTool(tool -> tool.name("generateReport")
         .description("Generate a report")
         .schema("")
         .tool(request -> reports.generate(request))
-        .cancel(reports::cancelInvocation));
+        .onCancel(reports::cancelInvocation));
 ```
 
 #### Example

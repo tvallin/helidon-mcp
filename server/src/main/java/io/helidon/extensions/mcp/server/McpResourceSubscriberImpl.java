@@ -25,8 +25,8 @@ class McpResourceSubscriberImpl implements McpResourceSubscriber, McpCancellatio
     }
 
     @Override
-    public Optional<McpCancellable> cancel() {
-        return config.cancel();
+    public Optional<McpCancellable> onCancel() {
+        return config.onCancel();
     }
 
     @Override

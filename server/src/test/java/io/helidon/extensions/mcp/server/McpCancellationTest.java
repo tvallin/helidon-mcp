@@ -37,16 +37,17 @@ class McpCancellationTest {
     void builderComponentsDeliverCancellationToTheirHandlers() {
         var handler = mock(McpCancellable.class);
         var server = McpServerFeature.builder()
-                .addTool(tool -> tool.name("tool").schema("").tool(_ -> McpToolResult.create()).cancel(handler))
+                .addTool(tool -> tool.name("tool").schema("").tool(_ -> McpToolResult.create()).onCancel(handler))
                 .addPrompt(prompt -> prompt.name("prompt").description("prompt")
-                        .prompt(_ -> McpPromptResult.create()).cancel(handler))
+                        .prompt(_ -> McpPromptResult.create()).onCancel(handler))
                 .addResource(resource -> resource.name("resource").uri("test://resource").mediaType(MediaTypes.TEXT_PLAIN)
-                        .resource(_ -> McpResourceResult.create()).cancel(handler))
+                        .resource(_ -> McpResourceResult.create()).onCancel(handler))
                 .addCompletion(completion -> completion.reference("prompt")
-                        .completion(_ -> McpCompletionResult.create()).cancel(handler))
-                .addResourceSubscriber(subscriber -> subscriber.uri("test://resource").subscribe(_ -> { }).cancel(handler))
+                        .completion(_ -> McpCompletionResult.create()).onCancel(handler))
+                .addResourceSubscriber(subscriber -> subscriber.uri("test://resource")
+                        .subscribe(_ -> { }).onCancel(handler))
                 .addResourceUnsubscriber(unsubscriber -> unsubscriber.uri("test://resource")
-                        .unsubscribe(_ -> { }).cancel(handler))
+                        .unsubscribe(_ -> { }).onCancel(handler))
                 .buildPrototype();
         for (Object component : List.of(server.tools().getFirst(), server.prompts().getFirst(), server.resources().getFirst(),
                                         server.completions().getFirst(), server.resourceSubscribers().getFirst(),
@@ -61,7 +62,7 @@ class McpCancellationTest {
                 cancellation.cancel(JsonNull.instance());
             }
 
-            verify(handler, description(component.getClass().getSimpleName())).cancel(request);
+            verify(handler, description(component.getClass().getSimpleName())).onCancel(request);
         }
     }
 
