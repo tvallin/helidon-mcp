@@ -15,11 +15,18 @@
  */
 package io.helidon.extensions.mcp.server;
 
-final class McpCompletionImpl implements McpCompletion {
+import java.util.Optional;
+
+final class McpCompletionImpl implements McpCompletion, McpCancellationConfig {
     private final McpCompletionConfig config;
 
     McpCompletionImpl(McpCompletionConfig config) {
         this.config = config;
+    }
+
+    @Override
+    public Optional<McpCancellable> cancel() {
+        return config.cancel();
     }
 
     @Override

@@ -38,6 +38,7 @@ import io.helidon.webserver.sse.SseSink;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
 
 import static org.hamcrest.MatcherAssert.assertThat;
@@ -480,8 +481,9 @@ class McpSamplingTest {
         assertThat(exception.getMessage(), is("No pending response for request id 0"));
     }
 
-    @Test
-    void cancellationTargetsOnlyTheActiveSamplingToolInvocation() {
+    @ParameterizedTest(name = "only the active tool invocation is cancelled (builder: {0})")
+    @ValueSource(booleans = {false, true})
+    void cancellationTargetsOnlyTheActiveSamplingToolInvocation(boolean useBuilder) {
         CancellableTool tool = mock(CancellableTool.class);
         when(tool.name()).thenReturn("tool");
         when(tool.description()).thenReturn("Cancellable tool");
@@ -491,9 +493,16 @@ class McpSamplingTest {
             request.features().cancellation().cancel(JsonNull.instance());
             return McpToolResult.create("second");
         });
+        var server = McpServerFeature.builder();
+        if (useBuilder) {
+            server.addTool(builder -> builder.name(tool.name()).description(tool.description()).schema(tool.schema())
+                    .tool(tool::tool).cancel(tool::cancel));
+        } else {
+            server.addTool(tool);
+        }
         McpSession session = session(McpProtocolVersion.VERSION_2025_11_25, """
                 {"sampling": {"tools": {}}}
-                """, tool);
+                """, server.buildPrototype());
         acceptSamplingResponse(session, 0, """
                 [
                   {"type": "tool_use", "id": "call-1", "name": "tool", "input": {}},

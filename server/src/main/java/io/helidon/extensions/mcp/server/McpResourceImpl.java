@@ -20,11 +20,16 @@ import java.util.Optional;
 
 import io.helidon.common.media.type.MediaType;
 
-final class McpResourceImpl implements McpResource {
+final class McpResourceImpl implements McpResource, McpCancellationConfig {
     private final McpResourceConfig config;
 
     McpResourceImpl(McpResourceConfig config) {
         this.config = config;
+    }
+
+    @Override
+    public Optional<McpCancellable> cancel() {
+        return config.cancel();
     }
 
     @Override

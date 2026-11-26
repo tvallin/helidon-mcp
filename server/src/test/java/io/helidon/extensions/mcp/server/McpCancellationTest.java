@@ -16,16 +16,54 @@
 
 package io.helidon.extensions.mcp.server;
 
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import io.helidon.common.media.type.MediaTypes;
 import io.helidon.json.JsonNull;
 import org.junit.jupiter.api.Test;
 
 import static org.hamcrest.MatcherAssert.assertThat;
 import static org.hamcrest.Matchers.is;
+import static org.mockito.Mockito.description;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 class McpCancellationTest {
+
+    @Test
+    void builderComponentsDeliverCancellationToTheirHandlers() {
+        var handler = mock(McpCancellable.class);
+        var server = McpServerFeature.builder()
+                .addTool(tool -> tool.name("tool").schema("").tool(_ -> McpToolResult.create()).cancel(handler))
+                .addPrompt(prompt -> prompt.name("prompt").description("prompt")
+                        .prompt(_ -> McpPromptResult.create()).cancel(handler))
+                .addResource(resource -> resource.name("resource").uri("test://resource").mediaType(MediaTypes.TEXT_PLAIN)
+                        .resource(_ -> McpResourceResult.create()).cancel(handler))
+                .addCompletion(completion -> completion.reference("prompt")
+                        .completion(_ -> McpCompletionResult.create()).cancel(handler))
+                .addResourceSubscriber(subscriber -> subscriber.uri("test://resource").subscribe(_ -> { }).cancel(handler))
+                .addResourceUnsubscriber(unsubscriber -> unsubscriber.uri("test://resource")
+                        .unsubscribe(_ -> { }).cancel(handler))
+                .buildPrototype();
+        for (Object component : List.of(server.tools().getFirst(), server.prompts().getFirst(), server.resources().getFirst(),
+                                        server.completions().getFirst(), server.resourceSubscribers().getFirst(),
+                                        server.resourceUnsubscribers().getFirst())) {
+            var request = mock(McpRequest.class);
+            var features = mock(McpFeatures.class);
+            var cancellation = new McpCancellation();
+            when(request.features()).thenReturn(features);
+            when(features.cancellation()).thenReturn(cancellation);
+
+            try (var _ = McpCancellation.register(component, request)) {
+                cancellation.cancel(JsonNull.instance());
+            }
+
+            verify(handler, description(component.getClass().getSimpleName())).cancel(request);
+        }
+    }
 
     @Test
     void testCancellationDefault() {

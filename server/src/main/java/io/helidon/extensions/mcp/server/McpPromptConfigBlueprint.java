@@ -26,7 +26,18 @@ import io.helidon.builder.api.Prototype;
  * Prompt configuration.
  */
 @Prototype.Blueprint
-interface McpPromptConfigBlueprint {
+@Prototype.IncludeDefaultMethods("cancel")
+interface McpPromptConfigBlueprint extends McpCancellationConfig {
+    /**
+     * Handle cancellation of a prompt request. The handler receives the same request as the component.
+     *
+     * @return the cancellation handler, if configured
+     */
+    @Override
+    default Optional<McpCancellable> cancel() {
+        return Optional.empty();
+    }
+
     /**
      * Prompt name.
      *

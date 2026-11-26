@@ -18,11 +18,16 @@ package io.helidon.extensions.mcp.server;
 import java.util.List;
 import java.util.Optional;
 
-final class McpToolImpl implements McpTool {
+final class McpToolImpl implements McpTool, McpCancellationConfig {
     private final McpToolConfig config;
 
     McpToolImpl(McpToolConfig config) {
         this.config = config;
+    }
+
+    @Override
+    public Optional<McpCancellable> cancel() {
+        return config.cancel();
     }
 
     @Override

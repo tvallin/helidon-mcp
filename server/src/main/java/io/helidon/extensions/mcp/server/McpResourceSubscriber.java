@@ -68,9 +68,12 @@ public interface McpResourceSubscriber extends RuntimeType.Api<McpResourceSubscr
 
     @Override
     default McpResourceSubscriberConfig prototype() {
-        return McpResourceSubscriberConfig.builder()
+        var builder = McpResourceSubscriberConfig.builder()
                 .uri(uri())
-                .subscribe(this::subscribe)
-                .buildPrototype();
+                .subscribe(this::subscribe);
+        if (this instanceof McpCancellable cancellable) {
+            builder.cancel(cancellable);
+        }
+        return builder.buildPrototype();
     }
 }

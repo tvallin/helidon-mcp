@@ -15,6 +15,7 @@
  */
 package io.helidon.extensions.mcp.server;
 
+import java.util.Optional;
 import java.util.function.Function;
 
 import io.helidon.builder.api.Option;
@@ -24,7 +25,18 @@ import io.helidon.builder.api.Prototype;
  * Completion configuration.
  */
 @Prototype.Blueprint
-interface McpCompletionConfigBlueprint {
+@Prototype.IncludeDefaultMethods("cancel")
+interface McpCompletionConfigBlueprint extends McpCancellationConfig {
+    /**
+     * Handle cancellation of a completion request. The handler receives the same request as the component.
+     *
+     * @return the cancellation handler, if configured
+     */
+    @Override
+    default Optional<McpCancellable> cancel() {
+        return Optional.empty();
+    }
+
     /**
      * Completion reference must be a {@link McpPromptArgument} name or a {@link McpResource} uri template.
      *

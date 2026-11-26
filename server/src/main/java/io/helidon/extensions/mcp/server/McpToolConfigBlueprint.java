@@ -26,7 +26,18 @@ import io.helidon.builder.api.Prototype;
  * Tool configuration.
  */
 @Prototype.Blueprint
-interface McpToolConfigBlueprint {
+@Prototype.IncludeDefaultMethods("cancel")
+interface McpToolConfigBlueprint extends McpCancellationConfig {
+    /**
+     * Handle cancellation of a tool request. The handler receives the same request as the component.
+     *
+     * @return the cancellation handler, if configured
+     */
+    @Override
+    default Optional<McpCancellable> cancel() {
+        return Optional.empty();
+    }
+
     /**
      * Tool name.
      *

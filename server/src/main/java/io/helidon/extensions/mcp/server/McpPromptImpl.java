@@ -18,11 +18,16 @@ package io.helidon.extensions.mcp.server;
 import java.util.List;
 import java.util.Optional;
 
-final class McpPromptImpl implements McpPrompt {
+final class McpPromptImpl implements McpPrompt, McpCancellationConfig {
     private final McpPromptConfig config;
 
     McpPromptImpl(McpPromptConfig config) {
         this.config = config;
+    }
+
+    @Override
+    public Optional<McpCancellable> cancel() {
+        return config.cancel();
     }
 
     @Override

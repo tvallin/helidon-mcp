@@ -43,13 +43,18 @@ public final class McpCancellation {
     }
 
     static Registration register(Object component, McpRequest request) {
-        if (component instanceof McpCancellable cancellable) {
-            McpCancellation cancellation = request.features().cancellation();
-            Runnable hook = () -> cancellable.cancel(request);
-            cancellation.registerHook(hook);
-            return () -> cancellation.unregisterCancellationHook(hook);
+        McpCancellable handler = switch (component) {
+            case McpCancellable cancellable -> cancellable;
+            case McpCancellationConfig config -> config.cancel().orElse(null);
+            default -> null;
+        };
+        if (handler == null) {
+            return () -> { };
         }
-        return () -> { };
+        McpCancellation cancellation = request.features().cancellation();
+        Runnable hook = () -> handler.cancel(request);
+        cancellation.registerHook(hook);
+        return () -> cancellation.unregisterCancellationHook(hook);
     }
 
     /**
@@ -67,7 +72,8 @@ public final class McpCancellation {
      *
      * @param hook cancellation hook
      * @throws NullPointerException if the hook is {@code null}
-     * @deprecated Implement {@link McpCancellable} on the component to let the server register the callback.
+     * @deprecated Implement {@link McpCancellable} on the component or pass its handler to the component builder's
+     *         {@code cancel} method.
      */
     @Deprecated(since = "27.0.0")
     public void registerCancellationHook(Runnable hook) {

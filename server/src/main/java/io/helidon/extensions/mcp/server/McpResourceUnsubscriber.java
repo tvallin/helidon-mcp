@@ -68,9 +68,12 @@ public interface McpResourceUnsubscriber extends RuntimeType.Api<McpResourceUnsu
 
     @Override
     default McpResourceUnsubscriberConfig prototype() {
-        return McpResourceUnsubscriberConfig.builder()
+        var builder = McpResourceUnsubscriberConfig.builder()
                 .uri(uri())
-                .unsubscribe(this::unsubscribe)
-                .buildPrototype();
+                .unsubscribe(this::unsubscribe);
+        if (this instanceof McpCancellable cancellable) {
+            builder.cancel(cancellable);
+        }
+        return builder.buildPrototype();
     }
 }

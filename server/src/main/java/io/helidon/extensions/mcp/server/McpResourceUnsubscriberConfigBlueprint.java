@@ -15,6 +15,7 @@
  */
 package io.helidon.extensions.mcp.server;
 
+import java.util.Optional;
 import java.util.function.Consumer;
 
 import io.helidon.builder.api.Prototype;
@@ -23,7 +24,18 @@ import io.helidon.builder.api.Prototype;
  * Configuration of an MCP Resource Unsubscriber.
  */
 @Prototype.Blueprint
-interface McpResourceUnsubscriberConfigBlueprint extends Prototype.Factory<McpResourceUnsubscriber> {
+@Prototype.IncludeDefaultMethods("cancel")
+interface McpResourceUnsubscriberConfigBlueprint extends Prototype.Factory<McpResourceUnsubscriber>, McpCancellationConfig {
+    /**
+     * Handle cancellation of a resource unsubscription request. The handler receives the same request as the component.
+     *
+     * @return the cancellation handler, if configured
+     */
+    @Override
+    default Optional<McpCancellable> cancel() {
+        return Optional.empty();
+    }
+
     /**
      * Resource URI.
      *

@@ -15,11 +15,18 @@
  */
 package io.helidon.extensions.mcp.server;
 
-class McpResourceUnsubscriberImpl implements McpResourceUnsubscriber {
+import java.util.Optional;
+
+class McpResourceUnsubscriberImpl implements McpResourceUnsubscriber, McpCancellationConfig {
     private final McpResourceUnsubscriberConfig config;
 
     McpResourceUnsubscriberImpl(McpResourceUnsubscriberConfig configuration) {
         this.config = configuration;
+    }
+
+    @Override
+    public Optional<McpCancellable> cancel() {
+        return config.cancel();
     }
 
     @Override
